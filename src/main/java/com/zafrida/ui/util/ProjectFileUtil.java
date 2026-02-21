@@ -2,10 +2,13 @@ package com.zafrida.ui.util;
 
 import com.intellij.ide.projectView.ProjectView;
 import com.intellij.openapi.command.WriteCommandAction;
+import com.intellij.openapi.editor.Editor;
 import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptor;
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
+import com.intellij.openapi.fileEditor.FileEditor;
 import com.intellij.openapi.fileEditor.FileEditorManager;
+import com.intellij.openapi.fileEditor.TextEditor;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.VfsUtil;
 import com.intellij.openapi.vfs.VirtualFile;
@@ -138,7 +141,11 @@ public final class ProjectFileUtil {
      */
     public static void openAndSelectInProject(@NotNull Project project, @NotNull VirtualFile file) {
         if (!file.isDirectory()) {
-            FileEditorManager.getInstance(project).openFile(file, true);
+           FileEditor[] editors = FileEditorManager.getInstance(project).openFile(file, true);
+           for (FileEditor editor : editors) {
+               Editor e = ((TextEditor) editor).getEditor();
+               e.getDocument().setReadOnly(true);
+           }
         }
         ProjectView view = ProjectView.getInstance(project);
         PsiFile psiFile = PsiManager.getInstance(project).findFile(file);

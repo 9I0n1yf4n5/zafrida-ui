@@ -13,6 +13,7 @@ import com.intellij.openapi.editor.ex.EditorEx;
 import com.intellij.openapi.editor.highlighter.EditorHighlighterFactory;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.fileTypes.FileTypeManager;
+import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
@@ -769,7 +770,10 @@ public final class ZaFridaTemplatePanel extends JPanel implements Disposable {
         }
         templateDescLabel.setText(desc != null ? desc : "");
 
-        previewDocument = EditorFactory.getInstance().createDocument(template.getContent());
+        String content = template.getContent();
+        content = StringUtil.convertLineSeparators(content);
+
+        previewDocument = EditorFactory.getInstance().createDocument(content);
         previewEditor = EditorFactory.getInstance().createEditor(
                 previewDocument, project, FileTypeManager.getInstance().getFileTypeByExtension("js"), true);
 
