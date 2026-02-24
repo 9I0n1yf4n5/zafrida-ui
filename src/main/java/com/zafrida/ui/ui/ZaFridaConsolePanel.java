@@ -229,7 +229,7 @@ public final class ZaFridaConsolePanel extends JPanel implements Disposable {
         ApplicationManager.getApplication().executeOnPooledThread(() -> {
             VirtualFile file = LocalFileSystem.getInstance().refreshAndFindFileByPath(path);
             if (file != null && file.isValid() && !file.isDirectory()) {
-                ApplicationManager.getApplication().invokeLater(() -> ProjectFileUtil.openAndSelectInProject(project, file));
+                ApplicationManager.getApplication().invokeLater(() -> ProjectFileUtil.openAndSelectLogFileReadOnly(project, file));
                 return;
             }
 

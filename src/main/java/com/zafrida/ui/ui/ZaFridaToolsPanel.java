@@ -300,7 +300,7 @@ public final class ZaFridaToolsPanel extends JPanel implements Disposable {
             File ioFile = file.toFile();
             VirtualFile vf = LocalFileSystem.getInstance().refreshAndFindFileByIoFile(ioFile);
             if (vf != null && vf.isValid() && !vf.isDirectory()) {
-                ApplicationManager.getApplication().invokeLater(() -> ProjectFileUtil.openAndSelectInProject(project, vf));
+                ApplicationManager.getApplication().invokeLater(() -> ProjectFileUtil.openAndSelectLogFileReadOnly(project, vf));
                 return;
             }
 

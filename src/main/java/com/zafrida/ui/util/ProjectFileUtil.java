@@ -141,12 +141,35 @@ public final class ProjectFileUtil {
      */
     public static void openAndSelectInProject(@NotNull Project project, @NotNull VirtualFile file) {
         if (!file.isDirectory()) {
-           FileEditor[] editors = FileEditorManager.getInstance(project).openFile(file, true);
-           for (FileEditor editor : editors) {
-               Editor e = ((TextEditor) editor).getEditor();
-               e.getDocument().setReadOnly(true);
-           }
+            FileEditorManager.getInstance(project).openFile(file, true);
         }
+        selectInProjectView(project, file);
+    }
+
+    /**
+     * 打开日志文件并在 Project 视图中选中（文件以只读方式打开；目录仅定位）。
+     * @param project 当前 IDE 项目
+     * @param file 目标文件
+     */
+    public static void openAndSelectLogFileReadOnly(@NotNull Project project, @NotNull VirtualFile file) {
+        if (!file.isDirectory()) {
+            FileEditor[] editors = FileEditorManager.getInstance(project).openFile(file, true);
+            for (FileEditor editor : editors) {
+                if (editor instanceof TextEditor) {
+                    Editor textEditor = ((TextEditor) editor).getEditor();
+                    textEditor.getDocument().setReadOnly(true);
+                }
+            }
+        }
+        selectInProjectView(project, file);
+    }
+
+    /**
+     * 在 Project 视图中选中目标文件或目录。
+     * @param project 当前 IDE 项目
+     * @param file 目标文件
+     */
+    private static void selectInProjectView(@NotNull Project project, @NotNull VirtualFile file) {
         ProjectView view = ProjectView.getInstance(project);
         PsiFile psiFile = PsiManager.getInstance(project).findFile(file);
         if (psiFile != null) {
