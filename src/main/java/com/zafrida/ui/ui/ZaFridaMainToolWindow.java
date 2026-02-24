@@ -3,9 +3,9 @@ package com.zafrida.ui.ui;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.Disposer;
-import com.intellij.openapi.util.IconLoader;
 import com.intellij.ui.components.JBTabbedPane;
 import com.intellij.icons.AllIcons;
+import com.zafrida.ui.util.ZaFridaIcons;
 import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.NotNull;
 
@@ -109,7 +109,7 @@ public final class ZaFridaMainToolWindow extends JPanel implements Disposable {
 
         JPanel projectRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         JButton newProjectBtn = new JButton("New Project");
-        newProjectBtn.setIcon(AllIcons.Actions.NewFolder);
+        newProjectBtn.setIcon(ZaFridaIcons.FRIDA_PROJECT);
         newProjectBtn.setToolTipText("New Frida Project");
         newProjectBtn.addActionListener(e -> runPanel.openNewProjectDialog());
 

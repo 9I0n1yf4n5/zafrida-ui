@@ -68,19 +68,22 @@
         <action id="ZAFrida.NewProject"
                 class="com.zafrida.ui.fridaproject.actions.NewZaFridaProjectAction"
                 text="New Frida Project"
-                description="Create a new ZAFrida project in the IDE root">
+                description="Create a new ZAFrida project in the IDE root"
+                icon="META-INF/icons/fridaproject.png">
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
         <action id="ZAFrida.SelectProjectFromFolder"
                 class="com.zafrida.ui.fridaproject.actions.SelectZaFridaProjectFromFolderAction"
                 text="Select Frida Project"
-                description="Select the folder as current ZAFrida project">
+                description="Select the folder as current ZAFrida project"
+                icon="META-INF/icons/fridaproject.png">
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
         <action id="ZAFrida.LoadProjectFromFolder"
                 class="com.zafrida.ui.fridaproject.actions.LoadZaFridaProjectFromFolderAction"
                 text="Load Frida Project"
-                description="Load selected folder into ZAFrida workspace">
+                description="Load selected folder into ZAFrida workspace"
+                icon="META-INF/icons/fridaproject.png">
             <add-to-group group-id="ProjectViewPopupMenu" anchor="last"/>
         </action>
 

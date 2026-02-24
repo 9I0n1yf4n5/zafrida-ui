@@ -32,6 +32,9 @@ public final class ZaFridaIcons {
     /** 010 Editor 图标（用于打开二进制日志等文件） */
     public static final Icon EDITOR_010 =
             IconLoader.getIcon("/META-INF/icons/editor-010.png", ZaFridaIcons.class);
+    /** ZAFrida Project 图标（用于项目相关入口） */
+    public static final Icon FRIDA_PROJECT =
+            IconLoader.getIcon("/META-INF/icons/fridaproject.png", ZaFridaIcons.class);
 
     /**
      * 根据平台选择图标。
