@@ -109,7 +109,7 @@ public final class ZaFridaMainToolWindow extends JPanel implements Disposable {
 
         JPanel projectRow = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
         JButton newProjectBtn = new JButton("New Project");
-        newProjectBtn.setIcon(ZaFridaIcons.FRIDA_PROJECT);
+        newProjectBtn.setIcon(scaleIcon(ZaFridaIcons.FRIDA_PROJECT, 0.875F));
         newProjectBtn.setToolTipText("New Frida Project");
         newProjectBtn.addActionListener(e -> runPanel.openNewProjectDialog());
 
@@ -171,6 +171,44 @@ public final class ZaFridaMainToolWindow extends JPanel implements Disposable {
         header.add(runRow);
 
         return header;
+    }
+
+    /**
+     * 对按钮图标做轻量等比缩放，用于与同排按钮视觉对齐。
+     *
+     * @param baseIcon 原始图标
+     * @param scale 缩放比例（0~1 表示缩小）
+     * @return 缩放后的图标
+     */
+    private static @NotNull Icon scaleIcon(@NotNull Icon baseIcon, float scale) {
+        float effectiveScale = scale;
+        if (effectiveScale <= 0.0F) {
+            effectiveScale = 1.0F;
+        }
+        final float finalScale = effectiveScale;
+        return new Icon() {
+            @Override
+            public void paintIcon(Component c, Graphics g, int x, int y) {
+                Graphics2D g2 = (Graphics2D) g.create();
+                try {
+                    g2.translate(x, y);
+                    g2.scale(finalScale, finalScale);
+                    baseIcon.paintIcon(c, g2, 0, 0);
+                } finally {
+                    g2.dispose();
+                }
+            }
+
+            @Override
+            public int getIconWidth() {
+                return Math.max(1, Math.round(baseIcon.getIconWidth() * finalScale));
+            }
+
+            @Override
+            public int getIconHeight() {
+                return Math.max(1, Math.round(baseIcon.getIconHeight() * finalScale));
+            }
+        };
     }
 
     /**
