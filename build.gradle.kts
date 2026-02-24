@@ -8,7 +8,7 @@ plugins {
 }
 
 group = "com.zafrida"
-version = "0.2.8"
+version = "0.2.9"
 
 repositories {
     mavenCentral()
@@ -24,7 +24,8 @@ dependencies {
     intellijPlatform {
         // 目标 IDE：PyCharm（2025.3 是当前时间点常见最新线）
         // 如果你本机 PyCharm 版本更低/更高，改成对应版本即可。
-        pycharm("2024.3")
+         pycharm("2024.3")
+//        pycharm("2025.3")
 
         // PyCharm 的 Python 核心插件
         bundledPlugin("PythonCore")
