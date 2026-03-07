@@ -41,6 +41,13 @@ public final class FridaCliService {
     /** 默认的设备枚举超时（毫秒）。部分 Windows / 远程环境可能较慢，因此这里相对保守。 */
     private static final int LIST_DEVICES_TIMEOUT_MS = 30_000;
 
+    /** Python 输出编码环境变量 key。 */
+    private static final String ENV_PYTHONIOENCODING = "PYTHONIOENCODING";
+    /** Python UTF-8 模式环境变量 key。 */
+    private static final String ENV_PYTHONUTF8 = "PYTHONUTF8";
+    /** Python 无缓冲输出环境变量 key。 */
+    private static final String ENV_PYTHONUNBUFFERED = "PYTHONUNBUFFERED";
+
     /** 通过 python -c 直接调用 frida 模块枚举设备，避免 frida-ls-devices 依赖 prompt_toolkit/Console。 */
     private static final String PY_ENUM_DEVICES_SCRIPT =
             "import frida\n"
@@ -303,13 +310,6 @@ public final class FridaCliService {
                 .withCharset(StandardCharsets.UTF_8);
 
         applyProjectPythonEnv(project, cmd);
-
-        // Make python stdout/stderr deterministic as UTF-8.
-        // 让 python 输出编码稳定为 UTF-8，避免 Windows 默认 codepage 导致乱码/解析失败。
-        cmd.getEnvironment().put("PYTHONIOENCODING", "UTF-8");
-        cmd.getEnvironment().put("PYTHONUTF8", "1");
-        cmd.getEnvironment().put("PYTHONUNBUFFERED", "1");
-
         cmd.addParameters("-c", PY_ENUM_DEVICES_SCRIPT);
         return cmd;
     }
@@ -353,6 +353,7 @@ public final class FridaCliService {
         // Make sure we inherit the parent environment, then prepend the project interpreter's PATH.
         // 确保继承父环境变量，并将项目解释器路径追加到 PATH 前面。
         cmd.withParentEnvironmentType(GeneralCommandLine.ParentEnvironmentType.CONSOLE);
+        applyPythonOutputEncodingEnv(cmd);
         PythonEnvInfo env = ProjectPythonEnvResolver.resolve(project);
         if (env != null) {
             // Prefer an absolute executable path when possible to avoid Windows CreateProcess PATH quirks.
@@ -366,6 +367,19 @@ public final class FridaCliService {
             }
             ProjectPythonEnvResolver.applyToCommandLine(cmd, env);
         }
+    }
+
+    /**
+     * 统一设置 Python 输出编码，避免不同系统默认编码差异导致日志乱码。
+     * <p>
+     * 对非 Python 程序这些变量通常无副作用；对 Python 入口（frida-tools）可强制 UTF-8 输出并关闭缓冲。
+     * </p>
+     * @param cmd 命令行对象
+     */
+    private void applyPythonOutputEncodingEnv(@NotNull GeneralCommandLine cmd) {
+        cmd.getEnvironment().put(ENV_PYTHONIOENCODING, "UTF-8");
+        cmd.getEnvironment().put(ENV_PYTHONUTF8, "1");
+        cmd.getEnvironment().put(ENV_PYTHONUNBUFFERED, "1");
     }
 
     private static boolean looksLikePath(@NotNull String value) {
