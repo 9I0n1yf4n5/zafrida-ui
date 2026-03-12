@@ -2,10 +2,16 @@ package com.zafrida.ui.settings;
 
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.options.SearchableConfigurable;
+import com.intellij.openapi.project.Project;
+import com.intellij.openapi.project.ProjectManager;
+import com.zafrida.ui.api.ZaFridaLocalHttpApiService;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.JComponent;
+import java.util.ArrayList;
+import java.util.List;
+
 /**
  * [UI入口] IDE "Settings/Preferences" 菜单集成。
  * <p>
@@ -53,7 +59,9 @@ public final class ZaFridaSettingsConfigurable implements SearchableConfigurable
     public @Nullable JComponent createComponent() {
         ZaFridaSettingsComponent c = new ZaFridaSettingsComponent();
         c.reset(settingsService.getState());
+        c.bindSkillsApiActions(this::handleManualStartSkillsApi, this::handleManualStopSkillsApi);
         this.component = c;
+        refreshSkillsApiStatusAsync();
         return c.getPanel();
     }
 
@@ -67,26 +75,9 @@ public final class ZaFridaSettingsConfigurable implements SearchableConfigurable
             return false;
         }
 
-        ZaFridaSettingsState copy = new ZaFridaSettingsState();
-        // start from current state
-        // 从当前状态拷贝作为基准
-        copy.fridaExecutable = settingsService.getState().fridaExecutable;
-        copy.fridaPsExecutable = settingsService.getState().fridaPsExecutable;
-        copy.fridaLsDevicesExecutable = settingsService.getState().fridaLsDevicesExecutable;
-        copy.fridaVersion = settingsService.getState().fridaVersion;
-        copy.vscodeExecutable = settingsService.getState().vscodeExecutable;
-        copy.editor010Executable = settingsService.getState().editor010Executable;
-        copy.logsDirName = settingsService.getState().logsDirName;
-        copy.defaultRemoteHost = settingsService.getState().defaultRemoteHost;
-        copy.defaultRemotePort = settingsService.getState().defaultRemotePort;
-        copy.useIdeScriptChooser = settingsService.getState().useIdeScriptChooser;
-        copy.templatesRootMode = settingsService.getState().templatesRootMode;
-        copy.remoteHosts = settingsService.getRemoteHosts();
-
+        ZaFridaSettingsState copy = createSnapshotFromCurrentState();
         component.applyTo(copy);
 
-        // compare
-        // 对比新旧配置
         ZaFridaSettingsState current = settingsService.getState();
         if (!safeEq(copy.fridaExecutable, current.fridaExecutable)) {
             return true;
@@ -121,6 +112,12 @@ public final class ZaFridaSettingsConfigurable implements SearchableConfigurable
         if (!safeEq(copy.templatesRootMode, current.templatesRootMode)) {
             return true;
         }
+        if (copy.enableSkillsHttpApi != current.enableSkillsHttpApi) {
+            return true;
+        }
+        if (copy.skillsApiPort != current.skillsApiPort) {
+            return true;
+        }
 
         if (copy.remoteHosts == null && current.remoteHosts != null && !current.remoteHosts.isEmpty()) {
             return true;
@@ -143,22 +140,15 @@ public final class ZaFridaSettingsConfigurable implements SearchableConfigurable
         if (component == null) {
             return;
         }
-        ZaFridaSettingsState newState = new ZaFridaSettingsState();
-        newState.fridaExecutable = settingsService.getState().fridaExecutable;
-        newState.fridaPsExecutable = settingsService.getState().fridaPsExecutable;
-        newState.fridaLsDevicesExecutable = settingsService.getState().fridaLsDevicesExecutable;
-        newState.fridaVersion = settingsService.getState().fridaVersion;
-        newState.vscodeExecutable = settingsService.getState().vscodeExecutable;
-        newState.editor010Executable = settingsService.getState().editor010Executable;
-        newState.logsDirName = settingsService.getState().logsDirName;
-        newState.defaultRemoteHost = settingsService.getState().defaultRemoteHost;
-        newState.defaultRemotePort = settingsService.getState().defaultRemotePort;
-        newState.useIdeScriptChooser = settingsService.getState().useIdeScriptChooser;
-        newState.templatesRootMode = settingsService.getState().templatesRootMode;
-        newState.remoteHosts = settingsService.getRemoteHosts();
+        ZaFridaSettingsState current = settingsService.getState();
+        boolean oldEnabled = current.enableSkillsHttpApi;
+        int oldPort = current.skillsApiPort;
 
+        ZaFridaSettingsState newState = createSnapshotFromCurrentState();
         component.applyTo(newState);
         settingsService.loadState(newState);
+
+        applySkillsApiChangeAsync(oldEnabled, oldPort, newState.enableSkillsHttpApi, newState.skillsApiPort);
     }
 
     /**
@@ -168,6 +158,7 @@ public final class ZaFridaSettingsConfigurable implements SearchableConfigurable
     public void reset() {
         if (component != null) {
             component.reset(settingsService.getState());
+            refreshSkillsApiStatusAsync();
         }
     }
 
@@ -177,6 +168,237 @@ public final class ZaFridaSettingsConfigurable implements SearchableConfigurable
     @Override
     public void disposeUIResources() {
         component = null;
+    }
+
+    /**
+     * 手动启动 Skills API（按钮/勾选触发）。
+     */
+    private void handleManualStartSkillsApi() {
+        ZaFridaSettingsComponent currentComponent = component;
+        if (currentComponent == null) {
+            return;
+        }
+        currentComponent.setSkillsApiStatus("Starting...", false);
+
+        ZaFridaSettingsState state = settingsService.getState();
+        state.enableSkillsHttpApi = currentComponent.isSkillsApiEnabled();
+        state.skillsApiPort = currentComponent.getSkillsApiPort();
+
+        if (!state.enableSkillsHttpApi) {
+            currentComponent.setSkillsApiStatus("Disabled", false);
+            return;
+        }
+
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            ApiControlResult result = startSkillsApiForOpenProjects(false);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                ZaFridaSettingsComponent c = component;
+                if (c == null) {
+                    return;
+                }
+                c.setSkillsApiStatus(result.statusText, result.running);
+                if (!result.errorMessage.isEmpty()) {
+                    c.showSkillsApiTip(result.errorMessage, true);
+                }
+            });
+        });
+    }
+
+    /**
+     * 手动停止 Skills API（按钮/取消勾选触发）。
+     */
+    private void handleManualStopSkillsApi() {
+        ZaFridaSettingsComponent currentComponent = component;
+        if (currentComponent == null) {
+            return;
+        }
+        currentComponent.setSkillsApiStatus("Stopping...", true);
+
+        ZaFridaSettingsState state = settingsService.getState();
+        state.enableSkillsHttpApi = currentComponent.isSkillsApiEnabled();
+        state.skillsApiPort = currentComponent.getSkillsApiPort();
+
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            stopSkillsApiForOpenProjects();
+            ApplicationManager.getApplication().invokeLater(() -> {
+                ZaFridaSettingsComponent c = component;
+                if (c == null) {
+                    return;
+                }
+                if (state.enableSkillsHttpApi) {
+                    c.setSkillsApiStatus("Stopped", false);
+                } else {
+                    c.setSkillsApiStatus("Disabled", false);
+                }
+            });
+        });
+    }
+
+    /**
+     * 按开关和端口变更处理 Skills API 生命周期。
+     */
+    private void applySkillsApiChangeAsync(boolean oldEnabled, int oldPort, boolean newEnabled, int newPort) {
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            if (!newEnabled) {
+                stopSkillsApiForOpenProjects();
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    ZaFridaSettingsComponent c = component;
+                    if (c != null) {
+                        c.setSkillsApiStatus("Disabled", false);
+                    }
+                });
+                return;
+            }
+
+            boolean shouldRestart = !oldEnabled || oldPort != newPort;
+            ApiControlResult result = startSkillsApiForOpenProjects(shouldRestart);
+            ApplicationManager.getApplication().invokeLater(() -> {
+                ZaFridaSettingsComponent c = component;
+                if (c == null) {
+                    return;
+                }
+                c.setSkillsApiStatus(result.statusText, result.running);
+                if (!result.errorMessage.isEmpty()) {
+                    c.showSkillsApiTip(result.errorMessage, true);
+                }
+            });
+        });
+    }
+
+    /**
+     * 刷新设置页中的 Skills API 状态。
+     */
+    private void refreshSkillsApiStatusAsync() {
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
+            ApiControlResult result = querySkillsApiStatus();
+            ApplicationManager.getApplication().invokeLater(() -> {
+                ZaFridaSettingsComponent c = component;
+                if (c != null) {
+                    c.setSkillsApiStatus(result.statusText, result.running);
+                }
+            });
+        });
+    }
+
+    private @NotNull ApiControlResult querySkillsApiStatus() {
+        List<Project> openProjects = listOpenProjects();
+        if (openProjects.isEmpty()) {
+            if (settingsService.getState().enableSkillsHttpApi) {
+                return new ApiControlResult(false, "No open project", "");
+            }
+            return new ApiControlResult(false, "Disabled", "");
+        }
+
+        int runningCount = 0;
+        int samplePort = -1;
+        for (Project project : openProjects) {
+            ZaFridaLocalHttpApiService service = project.getService(ZaFridaLocalHttpApiService.class);
+            if (service.isServerRunning()) {
+                runningCount++;
+                if (samplePort <= 0) {
+                    samplePort = service.getBoundPort();
+                }
+            }
+        }
+
+        if (runningCount <= 0) {
+            if (settingsService.getState().enableSkillsHttpApi) {
+                return new ApiControlResult(false, "Stopped", "");
+            }
+            return new ApiControlResult(false, "Disabled", "");
+        }
+        return new ApiControlResult(true, String.format("Running (%s, port=%s)", runningCount, samplePort), "");
+    }
+
+    private @NotNull ApiControlResult startSkillsApiForOpenProjects(boolean restart) {
+        List<Project> openProjects = listOpenProjects();
+        if (openProjects.isEmpty()) {
+            return new ApiControlResult(false, "No open project", "");
+        }
+
+        int runningCount = 0;
+        int samplePort = -1;
+        List<String> errors = new ArrayList<>();
+        for (Project project : openProjects) {
+            ZaFridaLocalHttpApiService service = project.getService(ZaFridaLocalHttpApiService.class);
+            boolean ok;
+            if (restart) {
+                ok = service.restartServerNow();
+            } else {
+                ok = service.startServerNow();
+            }
+            if (ok && service.isServerRunning()) {
+                runningCount++;
+                if (samplePort <= 0) {
+                    samplePort = service.getBoundPort();
+                }
+                continue;
+            }
+
+            String error = service.getLastStartError();
+            if (error == null || error.isEmpty()) {
+                error = "Unknown start error";
+            }
+            errors.add(String.format("%s: %s", project.getName(), error));
+        }
+
+        if (runningCount <= 0) {
+            String firstError;
+            if (errors.isEmpty()) {
+                firstError = "Skills HTTP API start failed";
+            } else {
+                firstError = errors.get(0);
+            }
+            return new ApiControlResult(false, "Start failed", firstError);
+        }
+
+        if (errors.isEmpty()) {
+            return new ApiControlResult(true, String.format("Running (%s, port=%s)", runningCount, samplePort), "");
+        }
+        return new ApiControlResult(
+                true,
+                String.format("Running (%s, port=%s, partial)", runningCount, samplePort),
+                errors.get(0)
+        );
+    }
+
+    private void stopSkillsApiForOpenProjects() {
+        List<Project> openProjects = listOpenProjects();
+        for (Project project : openProjects) {
+            ZaFridaLocalHttpApiService service = project.getService(ZaFridaLocalHttpApiService.class);
+            service.stopServerNow();
+        }
+    }
+
+    private @NotNull List<Project> listOpenProjects() {
+        Project[] projects = ProjectManager.getInstance().getOpenProjects();
+        List<Project> list = new ArrayList<>();
+        for (Project project : projects) {
+            if (project != null && !project.isDisposed()) {
+                list.add(project);
+            }
+        }
+        return list;
+    }
+
+    private @NotNull ZaFridaSettingsState createSnapshotFromCurrentState() {
+        ZaFridaSettingsState current = settingsService.getState();
+        ZaFridaSettingsState copy = new ZaFridaSettingsState();
+        copy.fridaExecutable = current.fridaExecutable;
+        copy.fridaPsExecutable = current.fridaPsExecutable;
+        copy.fridaLsDevicesExecutable = current.fridaLsDevicesExecutable;
+        copy.fridaVersion = current.fridaVersion;
+        copy.vscodeExecutable = current.vscodeExecutable;
+        copy.editor010Executable = current.editor010Executable;
+        copy.logsDirName = current.logsDirName;
+        copy.defaultRemoteHost = current.defaultRemoteHost;
+        copy.defaultRemotePort = current.defaultRemotePort;
+        copy.useIdeScriptChooser = current.useIdeScriptChooser;
+        copy.templatesRootMode = current.templatesRootMode;
+        copy.enableSkillsHttpApi = current.enableSkillsHttpApi;
+        copy.skillsApiPort = current.skillsApiPort;
+        copy.remoteHosts = settingsService.getRemoteHosts();
+        return copy;
     }
 
     /**
@@ -191,4 +413,20 @@ public final class ZaFridaSettingsConfigurable implements SearchableConfigurable
         }
         return a.equals(b);
     }
+
+    /**
+     * Skills API 批量控制结果。
+     */
+    private static final class ApiControlResult {
+        private final boolean running;
+        private final @NotNull String statusText;
+        private final @NotNull String errorMessage;
+
+        private ApiControlResult(boolean running, @NotNull String statusText, @NotNull String errorMessage) {
+            this.running = running;
+            this.statusText = statusText;
+            this.errorMessage = errorMessage;
+        }
+    }
 }
+

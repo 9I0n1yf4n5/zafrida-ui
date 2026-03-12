@@ -4,6 +4,7 @@ import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import com.zafrida.ui.adb.AdbService;
+import com.zafrida.ui.api.ZaFridaLocalHttpApiService;
 import com.zafrida.ui.diagnostics.EnvironmentDoctorDialog;
 import com.intellij.icons.AllIcons;
 import com.intellij.ide.plugins.IdeaPluginDescriptor;
@@ -98,6 +99,8 @@ public final class ZaFridaRunPanel extends JPanel implements Disposable {
     private final @NotNull ZaFridaSessionService sessionService;
     /** ADB 服务 */
     private final @NotNull AdbService adbService;
+    /** 本地 HTTP API 服务 */
+    private final @NotNull ZaFridaLocalHttpApiService localHttpApiService;
 
     /** 设备下拉框 */
     private final ComboBox<FridaDevice> deviceCombo = new ComboBox<>();
@@ -204,6 +207,7 @@ public final class ZaFridaRunPanel extends JPanel implements Disposable {
         this.sessionService = project.getService(ZaFridaSessionService.class);
         this.adbService = ApplicationManager.getApplication().getService(AdbService.class);
         this.fridaProjectManager = project.getService(ZaFridaProjectManager.class);
+        this.localHttpApiService = project.getService(ZaFridaLocalHttpApiService.class);
 
 
         JPanel form = new JPanel(new GridBagLayout());
@@ -228,6 +232,7 @@ public final class ZaFridaRunPanel extends JPanel implements Disposable {
         subscribeToFridaProjectChanges();
         reloadFridaProjectsIntoUi();
         applyActiveFridaProjectToUi(fridaProjectManager.getActiveProject());
+        localHttpApiService.bindRunPanel(this);
     }
 
     /**
@@ -890,8 +895,20 @@ public final class ZaFridaRunPanel extends JPanel implements Disposable {
      * 触发停止。
      */
     public void triggerStop() {
-        if (!stopBtn.isEnabled()) return;
+        if (!stopBtn.isEnabled()) {
+            return;
+        }
         stopRunSession();
+    }
+
+    /**
+     * 触发停止 Attach。
+     */
+    public void triggerStopAttach() {
+        if (!stopAttachBtn.isEnabled()) {
+            return;
+        }
+        stopAttachSession();
     }
 
     /**
@@ -917,6 +934,224 @@ public final class ZaFridaRunPanel extends JPanel implements Disposable {
         this.externalRunBtn = runButton;
         this.externalStopBtn = stopButton;
         syncExternalRunStopButtons();
+    }
+
+    /**
+     * 刷新当前设备列表（API 入口）。
+     */
+    public void refreshDevicesForApi() {
+        reloadDevicesAsync();
+    }
+
+    /**
+     * 刷新当前激活项目配置到 UI（API 入口）。
+     */
+    public void refreshActiveProjectUiForApi() {
+        applyActiveFridaProjectToUi(fridaProjectManager.getActiveProject());
+    }
+
+    /**
+     * 获取当前选中设备（API 入口）。
+     * @return 设备或 null
+     */
+    public @Nullable FridaDevice getSelectedDeviceForApi() {
+        return (FridaDevice) deviceCombo.getSelectedItem();
+    }
+
+    /**
+     * 按设备 ID 选中设备（API 入口）。
+     * @param deviceId 设备 ID
+     * @return true 表示已选中
+     */
+    public boolean selectDeviceByIdForApi(@NotNull String deviceId) {
+        String normalized = deviceId.trim();
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        int count = deviceCombo.getItemCount();
+        for (int i = 0; i < count; i++) {
+            FridaDevice item = deviceCombo.getItemAt(i);
+            if (normalized.equals(item.getId())) {
+                deviceCombo.setSelectedItem(item);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 按 host:port 选中设备（API 入口）。
+     * @param host host:port
+     * @return true 表示已选中
+     */
+    public boolean selectDeviceByHostForApi(@NotNull String host) {
+        String normalized = host.trim();
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        int count = deviceCombo.getItemCount();
+        for (int i = 0; i < count; i++) {
+            FridaDevice item = deviceCombo.getItemAt(i);
+            String itemHost = item.getHost();
+            if (itemHost != null && normalized.equals(itemHost)) {
+                deviceCombo.setSelectedItem(item);
+                return true;
+            }
+        }
+        return false;
+    }
+
+    /**
+     * 获取目标文本（API 入口）。
+     * @return 目标文本
+     */
+    public @NotNull String getTargetTextForApi() {
+        String text = targetField.getText();
+        if (text == null) {
+            return "";
+        }
+        return text.trim();
+    }
+
+    /**
+     * 设置目标文本（API 入口）。
+     * @param target 目标文本
+     */
+    public void setTargetTextForApi(@Nullable String target) {
+        String normalized;
+        if (target == null) {
+            normalized = "";
+        } else {
+            normalized = target.trim();
+        }
+        targetField.setText(normalized);
+        ZaFridaFridaProject active = fridaProjectManager.getActiveProject();
+        if (active == null) {
+            return;
+        }
+        fridaProjectManager.updateProjectConfigAsync(active, cfg -> {
+            if (normalized.isEmpty()) {
+                cfg.lastTarget = null;
+            } else {
+                cfg.lastTarget = normalized;
+            }
+        });
+    }
+
+    /**
+     * 获取 Extra Args（API 入口）。
+     * @return 参数字符串
+     */
+    public @NotNull String getExtraArgsForApi() {
+        String text = extraArgsField.getText();
+        if (text == null) {
+            return "";
+        }
+        return text;
+    }
+
+    /**
+     * 设置 Extra Args（API 入口）。
+     * @param args 参数字符串
+     */
+    public void setExtraArgsForApi(@Nullable String args) {
+        String normalized;
+        if (args == null) {
+            normalized = "";
+        } else {
+            normalized = args;
+        }
+        extraArgsField.setText(normalized);
+    }
+
+    /**
+     * 获取 Run 脚本路径（API 入口）。
+     * @return Run 脚本路径
+     */
+    public @NotNull String getRunScriptPathForApi() {
+        String text = runScriptField.getText();
+        if (text == null) {
+            return "";
+        }
+        return text.trim();
+    }
+
+    /**
+     * 获取 Attach 脚本路径（API 入口）。
+     * @return Attach 脚本路径
+     */
+    public @NotNull String getAttachScriptPathForApi() {
+        String text = attachScriptField.getText();
+        if (text == null) {
+            return "";
+        }
+        return text.trim();
+    }
+
+    /**
+     * 设置 Run 脚本路径（API 入口）。
+     * @param path 脚本路径
+     * @return true 表示设置成功
+     */
+    public boolean setRunScriptPathForApi(@NotNull String path) {
+        String normalized = path.trim();
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        VirtualFile file = LocalFileSystem.getInstance().refreshAndFindFileByPath(normalized);
+        if (file == null) {
+            return false;
+        }
+        if (!file.isValid() || file.isDirectory()) {
+            return false;
+        }
+        setRunScriptFile(file);
+        ZaFridaFridaProject active = fridaProjectManager.getActiveProject();
+        if (active != null) {
+            fridaProjectManager.updateMainScriptPathAsync(active, file);
+        }
+        return true;
+    }
+
+    /**
+     * 设置 Attach 脚本路径（API 入口）。
+     * @param path 脚本路径
+     * @return true 表示设置成功
+     */
+    public boolean setAttachScriptPathForApi(@NotNull String path) {
+        String normalized = path.trim();
+        if (normalized.isEmpty()) {
+            return false;
+        }
+        VirtualFile file = LocalFileSystem.getInstance().refreshAndFindFileByPath(normalized);
+        if (file == null) {
+            return false;
+        }
+        if (!file.isValid() || file.isDirectory()) {
+            return false;
+        }
+        setAttachScriptFile(file);
+        ZaFridaFridaProject active = fridaProjectManager.getActiveProject();
+        if (active != null) {
+            fridaProjectManager.updateAttachScriptPathAsync(active, file);
+        }
+        return true;
+    }
+
+    /**
+     * 获取 Run 控制台（API 入口）。
+     * @return Run 控制台面板
+     */
+    public @NotNull ZaFridaConsolePanel getRunConsolePanelForApi() {
+        return runConsolePanel;
+    }
+
+    /**
+     * 获取 Attach 控制台（API 入口）。
+     * @return Attach 控制台面板
+     */
+    public @NotNull ZaFridaConsolePanel getAttachConsolePanelForApi() {
+        return attachConsolePanel;
     }
 
 
@@ -1935,6 +2170,7 @@ public final class ZaFridaRunPanel extends JPanel implements Disposable {
      */
     @Override
     public void dispose() {
+        localHttpApiService.unbindRunPanel(this);
         // project service handles stop
         // 项目服务负责停止会话
     }

@@ -15,6 +15,8 @@ public final class ZaFridaSettingsState {
     public static final String TEMPLATE_ROOT_MODE_SYSTEM = "SYSTEM";
     /** 模板根目录模式：IDE 根目录 */
     public static final String TEMPLATE_ROOT_MODE_IDE = "IDE";
+    /** Skills HTTP API 默认端口 */
+    public static final int DEFAULT_SKILLS_API_PORT = 17839;
 
     /** frida 可执行文件路径 */
     public String fridaExecutable = "frida";
@@ -40,4 +42,8 @@ public final class ZaFridaSettingsState {
     public boolean useIdeScriptChooser = true;
     /** 模板根目录模式（SYSTEM/IDE） */
     public String templatesRootMode = TEMPLATE_ROOT_MODE_SYSTEM;
+    /** 是否开启 Skills 本地 HTTP API */
+    public boolean enableSkillsHttpApi = false;
+    /** Skills 本地 HTTP API 端口 */
+    public int skillsApiPort = DEFAULT_SKILLS_API_PORT;
 }

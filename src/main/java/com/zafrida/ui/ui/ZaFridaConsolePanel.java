@@ -150,6 +150,26 @@ public final class ZaFridaConsolePanel extends JPanel implements Disposable {
         openLogFileInVsCodeBtn.setEnabled(enabled);
     }
 
+    /**
+     * 获取最近一次会话日志路径。
+     * @return 日志路径，未启动时返回 null
+     */
+    public @Nullable String getLogFilePath() {
+        return lastLogFilePath;
+    }
+
+    /**
+     * 获取当前控制台文本快照。
+     * @return 控制台文本（可能为空字符串）
+     */
+    public @NotNull String getConsoleTextSnapshot() {
+        Editor editor = getEditor();
+        if (editor == null) {
+            return "";
+        }
+        return editor.getDocument().getText();
+    }
+
     private void initLogToolbar() {
         locateLogFileBtn.setIcon(AllIcons.General.Locate);
         locateLogFileBtn.setToolTipText("Locate log file in Project View");

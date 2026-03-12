@@ -36,6 +36,7 @@
         <applicationService serviceImplementation="com.zafrida.ui.diagnostics.ZaFridaDiagnosticsService"/>
         <projectService serviceImplementation="com.zafrida.ui.templates.ZaFridaTemplateService"/>
         <projectService serviceImplementation="com.zafrida.ui.session.ZaFridaSessionService"/>
+        <projectService serviceImplementation="com.zafrida.ui.api.ZaFridaLocalHttpApiService"/>
 
         <applicationConfigurable
                 id="com.zafrida.ui.settings"

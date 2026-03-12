@@ -51,6 +51,9 @@ public final class ZaFridaSettingsService implements PersistentStateComponent<Za
         if (ZaStrUtil.isBlank(state.fridaVersion)) {
             state.fridaVersion = DEFAULT_FRIDA_VERSION;
         }
+        if (state.skillsApiPort <= 0 || state.skillsApiPort > 65535) {
+            state.skillsApiPort = ZaFridaSettingsState.DEFAULT_SKILLS_API_PORT;
+        }
     }
 
     /**

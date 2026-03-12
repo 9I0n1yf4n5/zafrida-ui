@@ -70,6 +70,16 @@ public final class ZaFridaSettingsComponent {
     private final JBTextField defaultRemotePortField = new JBTextField();
     /** 是否使用 IDE 脚本选择器 */
     private final JBCheckBox useIdeScriptChooserCheckBox = new JBCheckBox("Use IDE script chooser (Project tree)");
+    /** 是否开启 Skills 本地 HTTP API */
+    private final JBCheckBox enableSkillsHttpApiCheckBox = new JBCheckBox("Enable Skills local HTTP API");
+    /** Skills 本地 HTTP API 端口 */
+    private final JBTextField skillsApiPortField = new JBTextField();
+    /** 手动启动 Skills API */
+    private final JButton startSkillsApiBtn = new JButton("Start");
+    /** 手动停止 Skills API */
+    private final JButton stopSkillsApiBtn = new JButton("Stop");
+    /** Skills API 状态提示 */
+    private final JLabel skillsApiStatusLabel = new JLabel("Stopped");
     /** 模板根目录模式下拉框 */
     private final JComboBox<TemplateRootOption> templatesRootModeCombo = new JComboBox<>();
     /** 模板根目录路径显示框 */
@@ -86,6 +96,14 @@ public final class ZaFridaSettingsComponent {
 
     /** 根面板 */
     private final JComponent panel;
+    /** 手动启动回调 */
+    private @Nullable Runnable startSkillsApiHandler;
+    /** 手动停止回调 */
+    private @Nullable Runnable stopSkillsApiHandler;
+    /** 当前运行状态 */
+    private boolean skillsApiRunning = false;
+    /** UI 是否在批量更新中 */
+    private boolean updatingUi = false;
 
     /**
      * 构造函数，初始化 UI。
@@ -105,8 +123,10 @@ public final class ZaFridaSettingsComponent {
         defaultRemoteHostField.setColumns(16);
         defaultRemotePortField.setColumns(6);
         fridaVersionField.setColumns(6);
+        skillsApiPortField.setColumns(6);
         defaultRemoteHostField.getEmptyText().setText("127.0.0.1");
         defaultRemotePortField.getEmptyText().setText("14725");
+        skillsApiPortField.getEmptyText().setText(String.valueOf(ZaFridaSettingsState.DEFAULT_SKILLS_API_PORT));
         fridaVersionField.getEmptyText().setText(ZaFridaSettingsService.DEFAULT_FRIDA_VERSION);
         fridaVersionField.setToolTipText("Frida major version. e.g. 16 / 17");
         vscodeField.getEmptyText().setText("code / code.cmd / Code.exe");
@@ -117,6 +137,16 @@ public final class ZaFridaSettingsComponent {
         defaultRemotePanel.add(defaultRemoteHostField);
         defaultRemotePanel.add(new JLabel(":"));
         defaultRemotePanel.add(defaultRemotePortField);
+
+        startSkillsApiBtn.setIcon(AllIcons.Actions.Execute);
+        stopSkillsApiBtn.setIcon(AllIcons.Actions.Suspend);
+        JPanel skillsApiPanel = new JPanel(new FlowLayout(FlowLayout.LEFT, 8, 0));
+        skillsApiPanel.add(enableSkillsHttpApiCheckBox);
+        skillsApiPanel.add(new JLabel("Port"));
+        skillsApiPanel.add(skillsApiPortField);
+        skillsApiPanel.add(startSkillsApiBtn);
+        skillsApiPanel.add(stopSkillsApiBtn);
+        skillsApiPanel.add(skillsApiStatusLabel);
 
         templatesRootModeCombo.addItem(new TemplateRootOption(
                 ZaFridaSettingsState.TEMPLATE_ROOT_MODE_SYSTEM,
@@ -143,6 +173,7 @@ public final class ZaFridaSettingsComponent {
                 .addLabeledComponent("Templates Root", templatesRootModeCombo, 1, false)
                 .addLabeledComponent("Templates Path", templatesRootPathField, 1, false)
                 .addLabeledComponent("Script Chooser", useIdeScriptChooserCheckBox, 1, false)
+                .addLabeledComponent("Skills HTTP API", skillsApiPanel, 1, false)
                 .addLabeledComponent("Default Remote Host:Port", defaultRemotePanel, 1, false)
                 .addLabeledComponent("Remote Hosts (host:port)", remotePanel, 1, false)
                 .getPanel();
@@ -152,7 +183,9 @@ public final class ZaFridaSettingsComponent {
             String defPort = textOrDefault(defaultRemotePortField.getText(), "14725");
             String initial = String.format("%s:%s", defHost, defPort);
             String input = Messages.showInputDialog(panel, "host:port", "ZAFrida", null, initial, null);
-            if (input == null) return;
+            if (input == null) {
+                return;
+            }
             String h = input.trim();
             if (!h.isEmpty() && !containsRemote(h)) {
                 remoteModel.addElement(h);
@@ -161,8 +194,40 @@ public final class ZaFridaSettingsComponent {
 
         removeRemoteBtn.addActionListener(e -> {
             int idx = remoteList.getSelectedIndex();
-            if (idx >= 0) remoteModel.remove(idx);
+            if (idx >= 0) {
+                remoteModel.remove(idx);
+            }
         });
+
+        enableSkillsHttpApiCheckBox.addActionListener(e -> {
+            if (updatingUi) {
+                return;
+            }
+            updateSkillsApiControlsEnabled();
+            if (enableSkillsHttpApiCheckBox.isSelected()) {
+                if (startSkillsApiHandler != null) {
+                    startSkillsApiHandler.run();
+                }
+                return;
+            }
+            if (stopSkillsApiHandler != null) {
+                stopSkillsApiHandler.run();
+            }
+        });
+
+        startSkillsApiBtn.addActionListener(e -> {
+            if (startSkillsApiHandler != null) {
+                startSkillsApiHandler.run();
+            }
+        });
+
+        stopSkillsApiBtn.addActionListener(e -> {
+            if (stopSkillsApiHandler != null) {
+                stopSkillsApiHandler.run();
+            }
+        });
+
+        updateSkillsApiControlsEnabled();
     }
 
     /**
@@ -174,28 +239,95 @@ public final class ZaFridaSettingsComponent {
     }
 
     /**
+     * 绑定 Skills API 的手动控制回调。
+     * @param startHandler 启动回调
+     * @param stopHandler 停止回调
+     */
+    public void bindSkillsApiActions(@Nullable Runnable startHandler, @Nullable Runnable stopHandler) {
+        this.startSkillsApiHandler = startHandler;
+        this.stopSkillsApiHandler = stopHandler;
+        updateSkillsApiControlsEnabled();
+    }
+
+    /**
+     * 设置 Skills API 状态文案与运行态。
+     * @param status 文案
+     * @param running 是否运行中
+     */
+    public void setSkillsApiStatus(@NotNull String status, boolean running) {
+        skillsApiStatusLabel.setText(status);
+        skillsApiRunning = running;
+        updateSkillsApiControlsEnabled();
+    }
+
+    /**
+     * 展示 Skills API 操作提示。
+     * @param message 提示文本
+     * @param error 是否错误提示
+     */
+    public void showSkillsApiTip(@NotNull String message, boolean error) {
+        if (error) {
+            Messages.showErrorDialog(panel, message, "ZAFrida");
+            return;
+        }
+        Messages.showInfoMessage(panel, message, "ZAFrida");
+    }
+
+    /**
+     * 是否开启 Skills API。
+     * @return true 表示开启
+     */
+    public boolean isSkillsApiEnabled() {
+        return enableSkillsHttpApiCheckBox.isSelected();
+    }
+
+    /**
+     * 读取 Skills API 端口。
+     * @return 端口号
+     */
+    public int getSkillsApiPort() {
+        return parsePort(skillsApiPortField.getText(), ZaFridaSettingsState.DEFAULT_SKILLS_API_PORT);
+    }
+
+    /**
      * 使用状态重置 UI。
      * @param state 配置状态
      */
     public void reset(@NotNull ZaFridaSettingsState state) {
-        fridaField.setText(orDefault(state.fridaExecutable, "frida"));
-        fridaPsField.setText(orDefault(state.fridaPsExecutable, "frida-ps"));
-        fridaLsDevicesField.setText(orDefault(state.fridaLsDevicesExecutable, "frida-ls-devices"));
-        fridaVersionField.setText(normalizeFridaVersion(state.fridaVersion));
-        vscodeField.setText(orDefault(state.vscodeExecutable, ""));
-        editor010Field.setText(orDefault(state.editor010Executable, ""));
-        logsDirField.setText(orDefault(state.logsDirName, "zafrida-logs"));
-        defaultRemoteHostField.setText(orDefault(state.defaultRemoteHost, "127.0.0.1"));
-        defaultRemotePortField.setText(String.valueOf(state.defaultRemotePort > 0 ? state.defaultRemotePort : 14725));
-        useIdeScriptChooserCheckBox.setSelected(state.useIdeScriptChooser);
-        setSelectedTemplatesRootMode(state.templatesRootMode);
-        updateTemplatesRootPathField();
-
-        remoteModel.clear();
-        if (state.remoteHosts != null) {
-            for (String h : state.remoteHosts) {
-                if (ZaStrUtil.isNotBlank(h)) remoteModel.addElement(h);
+        updatingUi = true;
+        try {
+            fridaField.setText(orDefault(state.fridaExecutable, "frida"));
+            fridaPsField.setText(orDefault(state.fridaPsExecutable, "frida-ps"));
+            fridaLsDevicesField.setText(orDefault(state.fridaLsDevicesExecutable, "frida-ls-devices"));
+            fridaVersionField.setText(normalizeFridaVersion(state.fridaVersion));
+            vscodeField.setText(orDefault(state.vscodeExecutable, ""));
+            editor010Field.setText(orDefault(state.editor010Executable, ""));
+            logsDirField.setText(orDefault(state.logsDirName, "zafrida-logs"));
+            defaultRemoteHostField.setText(orDefault(state.defaultRemoteHost, "127.0.0.1"));
+            defaultRemotePortField.setText(String.valueOf(state.defaultRemotePort > 0 ? state.defaultRemotePort : 14725));
+            useIdeScriptChooserCheckBox.setSelected(state.useIdeScriptChooser);
+            enableSkillsHttpApiCheckBox.setSelected(state.enableSkillsHttpApi);
+            int apiPort = state.skillsApiPort;
+            if (apiPort <= 0 || apiPort > 65535) {
+                apiPort = ZaFridaSettingsState.DEFAULT_SKILLS_API_PORT;
             }
+            skillsApiPortField.setText(String.valueOf(apiPort));
+            setSelectedTemplatesRootMode(state.templatesRootMode);
+            updateTemplatesRootPathField();
+
+            remoteModel.clear();
+            if (state.remoteHosts != null) {
+                for (String h : state.remoteHosts) {
+                    if (ZaStrUtil.isNotBlank(h)) {
+                        remoteModel.addElement(h);
+                    }
+                }
+            }
+            skillsApiRunning = false;
+            skillsApiStatusLabel.setText(state.enableSkillsHttpApi ? "Stopped" : "Disabled");
+            updateSkillsApiControlsEnabled();
+        } finally {
+            updatingUi = false;
         }
     }
 
@@ -214,6 +346,8 @@ public final class ZaFridaSettingsComponent {
         state.defaultRemoteHost = textOrDefault(defaultRemoteHostField.getText(), "127.0.0.1");
         state.defaultRemotePort = parsePort(defaultRemotePortField.getText(), 14725);
         state.useIdeScriptChooser = useIdeScriptChooserCheckBox.isSelected();
+        state.enableSkillsHttpApi = enableSkillsHttpApiCheckBox.isSelected();
+        state.skillsApiPort = parsePort(skillsApiPortField.getText(), ZaFridaSettingsState.DEFAULT_SKILLS_API_PORT);
         state.templatesRootMode = getSelectedTemplatesRootMode();
 
         List<String> remotes = new ArrayList<>();
@@ -401,7 +535,9 @@ public final class ZaFridaSettingsComponent {
      * @return 结果字符串
      */
     private static String textOrDefault(String s, String d) {
-        if (ZaStrUtil.isBlank(s)) return d;
+        if (ZaStrUtil.isBlank(s)) {
+            return d;
+        }
         return ZaStrUtil.trim(s);
     }
 
@@ -412,8 +548,25 @@ public final class ZaFridaSettingsComponent {
      * @return 结果字符串
      */
     private static String orDefault(String s, String d) {
-        if (ZaStrUtil.isBlank(s)) return d;
+        if (ZaStrUtil.isBlank(s)) {
+            return d;
+        }
         return s;
+    }
+
+    /**
+     * 按开关与运行态更新控件可用性。
+     */
+    private void updateSkillsApiControlsEnabled() {
+        boolean enabled = enableSkillsHttpApiCheckBox.isSelected();
+        skillsApiPortField.setEnabled(enabled);
+        if (!enabled) {
+            startSkillsApiBtn.setEnabled(false);
+            stopSkillsApiBtn.setEnabled(false);
+            return;
+        }
+        startSkillsApiBtn.setEnabled(!skillsApiRunning);
+        stopSkillsApiBtn.setEnabled(skillsApiRunning);
     }
 
     /**
@@ -423,10 +576,12 @@ public final class ZaFridaSettingsComponent {
      * @return 端口值
      */
     private static int parsePort(String s, int fallback) {
-        if (ZaStrUtil.isBlank(s)) return fallback;
+        if (ZaStrUtil.isBlank(s)) {
+            return fallback;
+        }
         try {
             int v = Integer.parseInt(s.trim());
-            return v > 0 ? v : fallback;
+            return v > 0 && v <= 65535 ? v : fallback;
         } catch (NumberFormatException e) {
             return fallback;
         }
