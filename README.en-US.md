@@ -42,6 +42,9 @@ Quick Start
     * Select target process or package name.
     * Click **Run**.
 6.  **Use Templates**: Switch to the `Templates` tab, check the Hook functions you need (e.g., "SSL Pinning Bypass"), and the code will be automatically injected into your script.
+7.  **Skills Automation (Optional)**: Disabled by default. Go to `Settings/Preferences -> ZAFrida -> Skills HTTP API`, check `Enable Skills` to auto-start the local API (or use manual `Start/Stop`). CLI and template locations:
+    * `skills-cli/zafrida_skill_cli.py`
+    * `skills-template/zafrida-http-control/`
 
 
 Features
@@ -102,6 +105,13 @@ Features
 
 * **Developer Aids**
     * One-click installation of `frida-gum.d.ts` for type hints and intelligent code completion in Frida JS.
+
+* **Skills Local Automation API**
+    * Adds a local Skills HTTP API (disabled by default) for scripted control: project switching, device/connection mode setup, Run/Attach actions, and run/attach log path/content reading.
+    * How to enable: `Settings/Preferences -> ZAFrida -> Skills HTTP API`, then check `Enable Skills`.
+    * Bundled CLI and template:
+        * `skills-cli/zafrida_skill_cli.py`
+        * `skills-template/zafrida-http-control/`
 
 Use Cases
 -----------------------------------
