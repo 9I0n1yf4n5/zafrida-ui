@@ -50,3 +50,13 @@ rebel.xml
 /zafrida-ui.zip
 **/AGENTS.md
 /.gradle-user-home/
+
+### Python ###
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
