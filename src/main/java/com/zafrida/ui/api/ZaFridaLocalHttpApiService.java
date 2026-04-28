@@ -401,14 +401,11 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
 
         CompletableFuture<Void> future = new CompletableFuture<>();
         projectManager.setActiveProjectAsync(targetProject, () -> future.complete(null));
-        waitFuture(future, "Switch project timeout");
+        awaitVoidFuture(future, "Switch project timeout");
 
         ZaFridaRunPanel panel = runPanelRef.get();
         if (panel != null) {
-            callOnUiThreadAndWait(() -> {
-                panel.refreshActiveProjectUiForApi();
-                return null;
-            });
+            runOnUiThreadAndWait(panel::refreshActiveProjectUiForApi);
         }
 
         Map<String, Object> data = new LinkedHashMap<>();
@@ -427,10 +424,7 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
 
         ZaFridaRunPanel panel = runPanelRef.get();
         if (panel != null) {
-            callOnUiThreadAndWait(() -> {
-                panel.refreshActiveProjectUiForApi();
-                return null;
-            });
+            runOnUiThreadAndWait(panel::refreshActiveProjectUiForApi);
         }
 
         Map<String, Object> data = new LinkedHashMap<>();
@@ -494,14 +488,11 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
             cfg.lastDeviceHost = String.format("%s:%s", cfg.remoteHost, cfg.remotePort);
             cfg.lastDeviceId = null;
         }, () -> future.complete(null));
-        waitFuture(future, "Update connection mode timeout");
+        awaitVoidFuture(future, "Update connection mode timeout");
 
         ZaFridaRunPanel panel = runPanelRef.get();
         if (panel != null) {
-            callOnUiThreadAndWait(() -> {
-                panel.refreshActiveProjectUiForApi();
-                return null;
-            });
+            runOnUiThreadAndWait(panel::refreshActiveProjectUiForApi);
         }
 
         ZaFridaProjectConfig cfg = loadProjectConfigBlocking(activeProject);
@@ -515,10 +506,7 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
     private @NotNull Map<String, Object> handleTargetSet(@NotNull RequestContext request) throws Exception {
         String target = request.getOrDefault("target", "");
         ZaFridaRunPanel panel = requireRunPanel();
-        callOnUiThreadAndWait(() -> {
-            panel.setTargetTextForApi(target);
-            return null;
-        });
+        runOnUiThreadAndWait(() -> panel.setTargetTextForApi(target));
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("target", target.trim());
@@ -561,10 +549,7 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
 
         ZaFridaRunPanel panel = requireRunPanel();
         String finalValue = value;
-        callOnUiThreadAndWait(() -> {
-            panel.setExtraArgsForApi(finalValue);
-            return null;
-        });
+        runOnUiThreadAndWait(() -> panel.setExtraArgsForApi(finalValue));
 
         String extra = callOnUiThreadAndWait(panel::getExtraArgsForApi);
         Map<String, Object> data = new LinkedHashMap<>();
@@ -574,37 +559,25 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
 
     private @NotNull Map<String, Object> handleRun(@NotNull RequestContext request) throws Exception {
         ZaFridaRunPanel panel = requireRunPanel();
-        callOnUiThreadAndWait(() -> {
-            panel.triggerRun();
-            return null;
-        });
+        runOnUiThreadAndWait(panel::triggerRun);
         return actionResult("run");
     }
 
     private @NotNull Map<String, Object> handleStop(@NotNull RequestContext request) throws Exception {
         ZaFridaRunPanel panel = requireRunPanel();
-        callOnUiThreadAndWait(() -> {
-            panel.triggerStop();
-            return null;
-        });
+        runOnUiThreadAndWait(panel::triggerStop);
         return actionResult("stop");
     }
 
     private @NotNull Map<String, Object> handleAttach(@NotNull RequestContext request) throws Exception {
         ZaFridaRunPanel panel = requireRunPanel();
-        callOnUiThreadAndWait(() -> {
-            panel.triggerAttach();
-            return null;
-        });
+        runOnUiThreadAndWait(panel::triggerAttach);
         return actionResult("attach");
     }
 
     private @NotNull Map<String, Object> handleStopAttach(@NotNull RequestContext request) throws Exception {
         ZaFridaRunPanel panel = requireRunPanel();
-        callOnUiThreadAndWait(() -> {
-            panel.triggerStopAttach();
-            return null;
-        });
+        runOnUiThreadAndWait(panel::triggerStopAttach);
         return actionResult("stop-attach");
     }
 
@@ -1005,7 +978,7 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         String typeParam = request.get("type");
         boolean isRun = !"attach".equalsIgnoreCase(typeParam == null ? "" : typeParam.trim());
 
-        callOnUiThreadAndWait(() -> {
+        runOnUiThreadAndWait(() -> {
             ZaFridaRunPanel panel = runPanelRef.get();
             if (panel == null) {
                 throw new ApiException(409, "RunPanel 尚未就绪");
@@ -1017,7 +990,6 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
                 console = panel.getAttachConsolePanelForApi();
             }
             console.clear();
-            return null;
         });
 
         Map<String, Object> data = new LinkedHashMap<>();
@@ -1360,6 +1332,12 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         return data;
     }
 
+    /**
+     * 在 EDT 上执行有返回值的操作并同步等待结果。
+     * <p>
+     * 注意：Callable 的返回值不能为 null，否则 @NotNull 契约会在运行时崩溃。
+     * 对于无返回值的操作（如 triggerRun），请使用 {@link #runOnUiThreadAndWait(Runnable)}。
+     */
     private <T> @NotNull T callOnUiThreadAndWait(@NotNull Callable<T> callable) throws Exception {
         if (ApplicationManager.getApplication().isDispatchThread()) {
             return callable.call();
@@ -1379,6 +1357,82 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
             }
         }, ModalityState.NON_MODAL);
         return waitFuture(future, "UI operation timeout");
+    }
+
+    /**
+     * 在 EDT 上执行无返回值的操作并同步等待完成。
+     * <p>
+     * 与 {@link #callOnUiThreadAndWait(Callable)} 不同，此方法不经过 @NotNull 约束的 waitFuture，
+     * 避免 return null 导致运行时 @NotNull 违规崩溃。
+     */
+    private void runOnUiThreadAndWait(@NotNull Runnable action) throws Exception {
+        if (ApplicationManager.getApplication().isDispatchThread()) {
+            action.run();
+            return;
+        }
+
+        CompletableFuture<Void> future = new CompletableFuture<>();
+        ApplicationManager.getApplication().invokeLater(() -> {
+            if (project.isDisposed()) {
+                future.completeExceptionally(new ApiException(410, "Project disposed"));
+                return;
+            }
+            try {
+                action.run();
+                future.complete(null);
+            } catch (Throwable t) {
+                future.completeExceptionally(t);
+            }
+        }, ModalityState.NON_MODAL);
+
+        try {
+            future.get(DEFAULT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(500, "Interrupted");
+        } catch (TimeoutException e) {
+            throw new ApiException(504, "UI operation timeout");
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof ApiException apiException) {
+                throw apiException;
+            }
+            String message = null;
+            if (cause != null) {
+                message = cause.getMessage();
+            }
+            if (ZaStrUtil.isBlank(message)) {
+                message = "Execution failed";
+            }
+            throw new ApiException(500, message);
+        }
+    }
+
+    /**
+     * 等待 Void 类型的 Future 完成（不经过 @NotNull 返回值约束）。
+     */
+    private void awaitVoidFuture(@NotNull CompletableFuture<Void> future, @NotNull String timeoutMessage) {
+        try {
+            future.get(DEFAULT_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(500, "Interrupted");
+        } catch (TimeoutException e) {
+            throw new ApiException(504, timeoutMessage);
+        } catch (ExecutionException e) {
+            Throwable cause = e.getCause();
+            if (cause instanceof ApiException apiException) {
+                throw apiException;
+            }
+            String message = null;
+            if (cause != null) {
+                message = cause.getMessage();
+            }
+            if (ZaStrUtil.isBlank(message)) {
+                message = "Execution failed";
+            }
+            throw new ApiException(500, message);
+        }
     }
 
     private <T> @NotNull T waitFuture(@NotNull CompletableFuture<T> future, @NotNull String timeoutMessage) {
