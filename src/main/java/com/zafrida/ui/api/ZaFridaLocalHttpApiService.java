@@ -14,6 +14,7 @@ import com.zafrida.ui.diagnostics.ZaFridaDiagnosticsService;
 import com.zafrida.ui.frida.FridaCliService;
 import com.zafrida.ui.frida.FridaConnectionMode;
 import com.zafrida.ui.frida.FridaDevice;
+import com.zafrida.ui.frida.FridaDeviceMode;
 import com.zafrida.ui.frida.FridaProcess;
 import com.zafrida.ui.frida.FridaProcessScope;
 import com.zafrida.ui.fridaproject.ZaFridaFridaProject;
@@ -953,7 +954,14 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         if (device == null) {
             return null;
         }
-        return device.getId();
+        if (device.getMode() != FridaDeviceMode.DEVICE_ID) {
+            return null;
+        }
+        String id = device.getId();
+        if (ZaStrUtil.isBlank(id) || "usb".equalsIgnoreCase(id)) {
+            return null;
+        }
+        return id;
     }
 
     private @NotNull Map<String, Object> buildAdbResult(@NotNull String action,
