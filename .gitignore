@@ -49,6 +49,7 @@ rebel.xml
 /patch.diff
 /zafrida-ui.zip
 **/AGENTS.md
+**/CLAUDE.md
 /.gradle-user-home/
 
 ### Python ###
@@ -60,3 +61,4 @@ __pycache__/
 .ruff_cache/
 .coverage
 .coverage.*
+/.claude/

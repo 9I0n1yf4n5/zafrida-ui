@@ -26,6 +26,7 @@ import com.sun.net.httpserver.HttpServer;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
+import java.io.BufferedReader;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
@@ -59,7 +60,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>
  * 说明：
  * 1. 仅绑定到 127.0.0.1，避免暴露到公网。
- * 2. 17 个单独接口 + 1 个汇总接口（不包含日志内容）。
+ * 2. 19 个单独接口 + 1 个汇总接口（不包含日志内容）。
  * 3. 任何 UI 读取/写入都通过 EDT 调度，避免线程模型破坏。
  */
 @Service(Service.Level.PROJECT)
@@ -94,6 +95,11 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
     private static final String API_RUN_LOG_CONTENT = API_BASE + "/run-log/content";
     private static final String API_ATTACH_LOG_PATH = API_BASE + "/attach-log/path";
     private static final String API_ATTACH_LOG_CONTENT = API_BASE + "/attach-log/content";
+    private static final String API_RUN_LOG_LINES = API_BASE + "/run-log/lines";
+    private static final String API_ATTACH_LOG_LINES = API_BASE + "/attach-log/lines";
+
+    /** 单次按行读取的上限行数 */
+    private static final int MAX_LINES_PER_REQUEST = 2000;
 
     private static final AtomicInteger SERVER_THREAD_ID = new AtomicInteger(1);
 
@@ -296,6 +302,8 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         createdServer.createContext(API_RUN_LOG_CONTENT, exchange -> dispatch(exchange, "GET", this::handleRunLogContent));
         createdServer.createContext(API_ATTACH_LOG_PATH, exchange -> dispatch(exchange, "GET", this::handleAttachLogPath));
         createdServer.createContext(API_ATTACH_LOG_CONTENT, exchange -> dispatch(exchange, "GET", this::handleAttachLogContent));
+        createdServer.createContext(API_RUN_LOG_LINES, exchange -> dispatch(exchange, "GET", this::handleRunLogLines));
+        createdServer.createContext(API_ATTACH_LOG_LINES, exchange -> dispatch(exchange, "GET", this::handleAttachLogLines));
     }
 
     private void dispatch(@NotNull HttpExchange exchange,
@@ -572,9 +580,12 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
 
     private @NotNull Map<String, Object> handleRunLogPath(@NotNull RequestContext request) throws Exception {
         LogState state = captureLogState(true);
+        long fileSize = computeFileSize(state.path, state.existsOnDisk);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("path", state.path);
         data.put("exists", state.existsOnDisk);
+        data.put("fileSize", fileSize);
+        data.put("sizeHuman", formatFileSize(fileSize));
         return data;
     }
 
@@ -584,14 +595,25 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
 
     private @NotNull Map<String, Object> handleAttachLogPath(@NotNull RequestContext request) throws Exception {
         LogState state = captureLogState(false);
+        long fileSize = computeFileSize(state.path, state.existsOnDisk);
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("path", state.path);
         data.put("exists", state.existsOnDisk);
+        data.put("fileSize", fileSize);
+        data.put("sizeHuman", formatFileSize(fileSize));
         return data;
     }
 
     private @NotNull Map<String, Object> handleAttachLogContent(@NotNull RequestContext request) throws Exception {
         return readLogContent(false, request);
+    }
+
+    private @NotNull Map<String, Object> handleRunLogLines(@NotNull RequestContext request) throws Exception {
+        return readLogLines(true, request);
+    }
+
+    private @NotNull Map<String, Object> handleAttachLogLines(@NotNull RequestContext request) throws Exception {
+        return readLogLines(false, request);
     }
 
     private @NotNull Map<String, Object> readLogContent(boolean runLog, @NotNull RequestContext request) throws Exception {
@@ -662,14 +684,6 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         }
 
         String content = new String(bytes, StandardCharsets.UTF_8);
-        if (truncated) {
-            content = String.format(
-                    "[ZAFrida API] Truncated to last %s bytes (fileSize=%s)%n%s",
-                    maxBytes,
-                    fileSize,
-                    content
-            );
-        }
 
         Map<String, Object> data = new LinkedHashMap<>();
         data.put("path", logPath.toAbsolutePath().toString());
@@ -677,6 +691,7 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         data.put("content", content);
         data.put("truncated", truncated);
         data.put("fileSize", fileSize);
+        data.put("sizeHuman", formatFileSize(fileSize));
         if (maxBytes > 0) {
             data.put("maxBytes", maxBytes);
         }
@@ -698,6 +713,81 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         }
     }
 
+    /**
+     * 按行读取日志文件的指定范围。
+     * <p>
+     * 参数：start（1-based 起始行号，默认 1）、count（读取行数，默认 100，上限 {@link #MAX_LINES_PER_REQUEST}）。
+     */
+    private @NotNull Map<String, Object> readLogLines(boolean runLog, @NotNull RequestContext request) throws Exception {
+        LogState state = captureLogState(runLog);
+        String path = request.get("path");
+        if (ZaStrUtil.isBlank(path)) {
+            path = state.path;
+        }
+        if (path == null) {
+            path = "";
+        }
+        path = path.trim();
+
+        if (path.isEmpty() || path.startsWith("(")) {
+            throw new ApiException(400, "日志文件路径无效，当前会话可能仅使用 Console 输出");
+        }
+
+        Path logPath = Paths.get(path);
+        if (!Files.exists(logPath) || !Files.isRegularFile(logPath)) {
+            throw new ApiException(404, String.format("Log file not found: %s", path));
+        }
+
+        int startLine = parseNonNegativeInt(request.get("start"), 1, "start");
+        if (startLine < 1) {
+            startLine = 1;
+        }
+        int count = parseNonNegativeInt(request.get("count"), 100, "count");
+        if (count <= 0) {
+            count = 100;
+        }
+        if (count > MAX_LINES_PER_REQUEST) {
+            count = MAX_LINES_PER_REQUEST;
+        }
+
+        long fileSize = Files.size(logPath);
+        List<String> lines = new ArrayList<>();
+        int currentLine = 0;
+        int endLine = startLine + count - 1;
+        boolean hasMore = false;
+
+        try (BufferedReader reader = Files.newBufferedReader(logPath, StandardCharsets.UTF_8)) {
+            String line;
+            while ((line = reader.readLine()) != null) {
+                currentLine++;
+                if (currentLine < startLine) {
+                    continue;
+                }
+                if (currentLine > endLine) {
+                    hasMore = true;
+                    break;
+                }
+                lines.add(line);
+            }
+        }
+
+        int actualEndLine = startLine + lines.size() - 1;
+        if (lines.isEmpty()) {
+            actualEndLine = startLine;
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("path", logPath.toAbsolutePath().toString());
+        data.put("fileSize", fileSize);
+        data.put("sizeHuman", formatFileSize(fileSize));
+        data.put("startLine", startLine);
+        data.put("endLine", actualEndLine);
+        data.put("linesRead", lines.size());
+        data.put("hasMore", hasMore);
+        data.put("lines", lines);
+        return data;
+    }
+
     private @NotNull Map<String, Object> buildStateSummary() throws Exception {
         ZaFridaFridaProject active = projectManager.getActiveProject();
         ZaFridaProjectConfig cfg = loadProjectConfigBlocking(active);
@@ -713,9 +803,16 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         session.put("runRunning", sessionService.isRunning(ZaFridaSessionType.RUN));
         session.put("attachRunning", sessionService.isRunning(ZaFridaSessionType.ATTACH));
 
+        long runFileSize = computeFileSize(uiSnapshot.runLogPath);
+        long attachFileSize = computeFileSize(uiSnapshot.attachLogPath);
+
         Map<String, Object> logs = new LinkedHashMap<>();
         logs.put("runPath", uiSnapshot.runLogPath);
         logs.put("attachPath", uiSnapshot.attachLogPath);
+        logs.put("runFileSize", runFileSize);
+        logs.put("attachFileSize", attachFileSize);
+        logs.put("runSizeHuman", formatFileSize(runFileSize));
+        logs.put("attachSizeHuman", formatFileSize(attachFileSize));
 
         Map<String, Object> ui = new LinkedHashMap<>();
         ui.put("target", uiSnapshot.target);
@@ -845,6 +942,54 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         } catch (NumberFormatException e) {
             throw new ApiException(400, String.format("Invalid %s: %s", fieldName, text));
         }
+    }
+
+    /**
+     * 将字节数格式化为可读字符串（如 "14.1 MB"）。
+     */
+    private static @NotNull String formatFileSize(long bytes) {
+        if (bytes < 1024L) {
+            return bytes + " B";
+        }
+        if (bytes < 1024L * 1024L) {
+            return String.format("%.1f KB", bytes / 1024.0);
+        }
+        if (bytes < 1024L * 1024L * 1024L) {
+            return String.format("%.1f MB", bytes / (1024.0 * 1024.0));
+        }
+        return String.format("%.2f GB", bytes / (1024.0 * 1024.0 * 1024.0));
+    }
+
+    /**
+     * 安全获取文件大小；路径无效或文件不存在时返回 0。
+     */
+    private long computeFileSize(@Nullable String path) {
+        return computeFileSize(path, true);
+    }
+
+    /**
+     * 安全获取文件大小。若 existsHint 为 false 且路径格式为控制台标记则跳过磁盘检查。
+     */
+    private long computeFileSize(@Nullable String path, boolean existsHint) {
+        if (ZaStrUtil.isBlank(path)) {
+            return 0L;
+        }
+        String trimmed = path.trim();
+        if (trimmed.startsWith("(")) {
+            return 0L;
+        }
+        if (!existsHint) {
+            return 0L;
+        }
+        try {
+            Path filePath = Paths.get(trimmed);
+            if (Files.exists(filePath) && Files.isRegularFile(filePath)) {
+                return Files.size(filePath);
+            }
+        } catch (Exception e) {
+            LOG.debug(String.format("[ZAFrida API] 获取文件大小失败: %s", trimmed), e);
+        }
+        return 0L;
     }
 
     private @NotNull Map<String, Object> actionResult(@NotNull String action) {

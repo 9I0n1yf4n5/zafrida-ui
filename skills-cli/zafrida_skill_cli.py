@@ -1,14 +1,9 @@
 #!/usr/bin/env python3
 """
-ZAFrida local HTTP API CLI.
+ZAFrida 本地 HTTP API 命令行工具（独立版本）。
 
-Default base URL:
-    http://127.0.0.1:17839/zafrida/api/v1
-
-You can override with:
-    --base-url ...
-or env:
-    ZAFRIDA_API_BASE=...
+默认地址：http://127.0.0.1:17839/zafrida/api/v1
+可通过 --base-url 或环境变量 ZAFRIDA_API_BASE 覆盖。
 """
 
 from __future__ import annotations
@@ -40,6 +35,7 @@ def api_call(
     params: Dict[str, str] | None = None,
     timeout: float = 30.0,
 ) -> Tuple[int, Dict]:
+    """发送 HTTP 请求并返回 (状态码, JSON 响应)。"""
     payload = params or {}
     url = f"{normalize_base_url(base_url)}{endpoint}"
     data_bytes = None
@@ -76,12 +72,13 @@ def add_common_flags(parser: argparse.ArgumentParser) -> None:
     parser.add_argument(
         "--base-url",
         default=os.environ.get("ZAFRIDA_API_BASE", DEFAULT_BASE_URL),
-        help="API base URL, e.g. http://127.0.0.1:17839/zafrida/api/v1",
+        help="API 基础地址，例如 http://127.0.0.1:17839/zafrida/api/v1",
     )
-    parser.add_argument("--compact", action="store_true", help="Print compact JSON")
+    parser.add_argument("--compact", action="store_true", help="输出紧凑 JSON（无缩进）")
 
 
 def print_result(status: int, payload: Dict, compact: bool) -> int:
+    """输出 JSON 并根据响应状态返回退出码。"""
     if compact:
         print(json.dumps(payload, ensure_ascii=False, separators=(",", ":")))
     else:
@@ -94,58 +91,75 @@ def print_result(status: int, payload: Dict, compact: bool) -> int:
 
 
 def main() -> int:
-    parser = argparse.ArgumentParser(description="ZAFrida local API CLI")
+    parser = argparse.ArgumentParser(description="ZAFrida 本地 API 命令行工具")
     subparsers = parser.add_subparsers(dest="command", required=True)
 
-    # Read endpoints
-    subparsers.add_parser("health")
-    subparsers.add_parser("state")
-    subparsers.add_parser("project-current")
-    subparsers.add_parser("run-log-path")
-    subparsers.add_parser("attach-log-path")
+    # ── 状态与健康 ──
+    subparsers.add_parser("health", help="健康检查")
+    subparsers.add_parser("state", help="完整状态汇总（含日志文件大小）")
 
-    run_log_content = subparsers.add_parser("run-log-content")
-    run_log_content.add_argument("--path", help="Override log file path")
-    run_log_content.add_argument("--max-bytes", type=int, default=0, help="Read only last N bytes (0=full)")
+    # ── 项目管理 ──
+    subparsers.add_parser("project-current", help="当前活跃项目")
 
-    attach_log_content = subparsers.add_parser("attach-log-content")
-    attach_log_content.add_argument("--path", help="Override log file path")
-    attach_log_content.add_argument("--max-bytes", type=int, default=0, help="Read only last N bytes (0=full)")
+    # ── 日志读取 ──
+    subparsers.add_parser("run-log-path", help="获取 Run 日志路径和文件大小")
+    subparsers.add_parser("attach-log-path", help="获取 Attach 日志路径和文件大小")
 
-    # Mutating endpoints
-    project_select = subparsers.add_parser("project-select")
-    project_select.add_argument("--name", required=True)
+    run_log_content = subparsers.add_parser("run-log-content", help="读取 Run 日志内容")
+    run_log_content.add_argument("--path", help="覆盖日志文件路径")
+    run_log_content.add_argument("--max-bytes", type=int, default=0, help="仅读取末尾 N 字节（0=全部）")
 
-    project_create = subparsers.add_parser("project-create")
-    project_create.add_argument("--name", required=True)
-    project_create.add_argument("--platform", default="android", choices=["android", "ios"])
+    attach_log_content = subparsers.add_parser("attach-log-content", help="读取 Attach 日志内容")
+    attach_log_content.add_argument("--path", help="覆盖日志文件路径")
+    attach_log_content.add_argument("--max-bytes", type=int, default=0, help="仅读取末尾 N 字节（0=全部）")
 
-    device_select = subparsers.add_parser("device-select")
+    run_log_lines = subparsers.add_parser("run-log-lines", help="按行读取 Run 日志")
+    run_log_lines.add_argument("--path", help="覆盖日志文件路径")
+    run_log_lines.add_argument("--start", type=int, default=1, help="起始行号（1-based，默认 1）")
+    run_log_lines.add_argument("--count", type=int, default=100, help="读取行数（默认 100，上限 2000）")
+
+    attach_log_lines = subparsers.add_parser("attach-log-lines", help="按行读取 Attach 日志")
+    attach_log_lines.add_argument("--path", help="覆盖日志文件路径")
+    attach_log_lines.add_argument("--start", type=int, default=1, help="起始行号（1-based，默认 1）")
+    attach_log_lines.add_argument("--count", type=int, default=100, help="读取行数（默认 100，上限 2000）")
+
+    # ── 项目管理（写操作） ──
+    project_select = subparsers.add_parser("project-select", help="切换活跃项目")
+    project_select.add_argument("--name", required=True, help="项目名称")
+
+    project_create = subparsers.add_parser("project-create", help="新建项目")
+    project_create.add_argument("--name", required=True, help="项目名称")
+    project_create.add_argument("--platform", default="android", choices=["android", "ios"], help="目标平台")
+
+    # ── 设备与连接 ──
+    device_select = subparsers.add_parser("device-select", help="选择设备")
     group = device_select.add_mutually_exclusive_group(required=True)
-    group.add_argument("--id")
-    group.add_argument("--host")
+    group.add_argument("--id", help="设备 ID")
+    group.add_argument("--host", help="远程设备地址")
 
-    mode_set = subparsers.add_parser("mode-set")
-    mode_set.add_argument("--mode", required=True, choices=["usb", "remote", "gadget"])
-    mode_set.add_argument("--host")
-    mode_set.add_argument("--port", type=int)
+    mode_set = subparsers.add_parser("mode-set", help="设置连接模式")
+    mode_set.add_argument("--mode", required=True, choices=["usb", "remote", "gadget"], help="连接模式")
+    mode_set.add_argument("--host", help="远程主机地址")
+    mode_set.add_argument("--port", type=int, help="远程端口")
 
-    target_set = subparsers.add_parser("target-set")
-    target_set.add_argument("--target", default="")
+    # ── 脚本与参数 ──
+    target_set = subparsers.add_parser("target-set", help="设置目标应用包名")
+    target_set.add_argument("--target", default="", help="目标包名")
 
-    run_script_set = subparsers.add_parser("run-script-set")
-    run_script_set.add_argument("--path", required=True)
+    run_script_set = subparsers.add_parser("run-script-set", help="设置 Run 脚本路径")
+    run_script_set.add_argument("--path", required=True, help="脚本绝对路径")
 
-    attach_script_set = subparsers.add_parser("attach-script-set")
-    attach_script_set.add_argument("--path", required=True)
+    attach_script_set = subparsers.add_parser("attach-script-set", help="设置 Attach 脚本路径")
+    attach_script_set.add_argument("--path", required=True, help="脚本绝对路径")
 
-    extra_set = subparsers.add_parser("extra-set")
-    extra_set.add_argument("--value", default="")
+    extra_set = subparsers.add_parser("extra-set", help="设置额外命令行参数")
+    extra_set.add_argument("--value", default="", help="参数值")
 
-    subparsers.add_parser("run")
-    subparsers.add_parser("stop")
-    subparsers.add_parser("attach")
-    subparsers.add_parser("stop-attach")
+    # ── 会话控制 ──
+    subparsers.add_parser("run", help="启动 Run 会话")
+    subparsers.add_parser("stop", help="停止 Run 会话")
+    subparsers.add_parser("attach", help="启动 Attach 会话")
+    subparsers.add_parser("stop-attach", help="停止 Attach 会话")
 
     add_common_flags(parser)
     args = parser.parse_args()
@@ -229,8 +243,24 @@ def main() -> int:
             params["path"] = args.path
         if args.max_bytes > 0:
             params["maxBytes"] = str(args.max_bytes)
+    elif command == "run-log-lines":
+        endpoint = "/run-log/lines"
+        if args.path:
+            params["path"] = args.path
+        if args.start > 1:
+            params["start"] = str(args.start)
+        if args.count != 100:
+            params["count"] = str(args.count)
+    elif command == "attach-log-lines":
+        endpoint = "/attach-log/lines"
+        if args.path:
+            params["path"] = args.path
+        if args.start > 1:
+            params["start"] = str(args.start)
+        if args.count != 100:
+            params["count"] = str(args.count)
     else:
-        print(f"Unknown command: {command}", file=sys.stderr)
+        print(f"未知命令: {command}", file=sys.stderr)
         return 2
 
     status, payload = api_call(args.base_url, endpoint, method=method, params=params)
@@ -239,4 +269,3 @@ def main() -> int:
 
 if __name__ == "__main__":
     sys.exit(main())
-
