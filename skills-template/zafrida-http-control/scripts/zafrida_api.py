@@ -82,6 +82,7 @@ def main() -> int:
     # ── 状态与健康 ──
     sub.add_parser("health", help="健康检查")
     sub.add_parser("state", help="完整状态汇总（含日志文件大小）")
+    sub.add_parser("diagnostics", help="运行环境诊断（6 项检查）")
 
     # ── 项目管理 ──
     sub.add_parser("project-current", help="当前活跃项目")
@@ -93,7 +94,12 @@ def main() -> int:
     project_create.add_argument("--name", required=True, help="项目名称")
     project_create.add_argument("--platform", default="android", choices=["android", "ios"], help="目标平台")
 
-    # ── 设备与连接 ──
+    # ── 设备与进程 ──
+    sub.add_parser("devices", help="列出所有已连接设备")
+
+    processes_cmd = sub.add_parser("processes", help="列出当前设备的进程/应用")
+    processes_cmd.add_argument("--scope", default="running", choices=["running", "apps", "installed"], help="列表范围（默认 running）")
+
     device_select = sub.add_parser("device-select", help="选择设备")
     device_group = device_select.add_mutually_exclusive_group(required=True)
     device_group.add_argument("--id", help="设备 ID")
@@ -117,11 +123,22 @@ def main() -> int:
     extra_set = sub.add_parser("extra-set", help="设置额外命令行参数")
     extra_set.add_argument("--value", default="", help="参数值")
 
+    # ── ADB 操作 ──
+    adb_fs = sub.add_parser("adb-force-stop", help="ADB 强制停止应用")
+    adb_fs.add_argument("--target", help="目标包名（默认使用当前 target）")
+
+    adb_oa = sub.add_parser("adb-open-app", help="ADB 启动应用")
+    adb_oa.add_argument("--target", help="目标包名（默认使用当前 target）")
+
     # ── 会话控制 ──
     sub.add_parser("run", help="启动 Run 会话")
     sub.add_parser("stop", help="停止 Run 会话")
     sub.add_parser("attach", help="启动 Attach 会话")
     sub.add_parser("stop-attach", help="停止 Attach 会话")
+
+    # ── 控制台 ──
+    console_clear = sub.add_parser("console-clear", help="清空控制台")
+    console_clear.add_argument("--type", default="run", choices=["run", "attach"], help="控制台类型（默认 run）")
 
     # ── 日志读取 ──
     sub.add_parser("run-log-path", help="获取 Run 日志路径和文件大小")
@@ -157,6 +174,14 @@ def main() -> int:
         endpoint = "/health"
     elif cmd == "state":
         endpoint = "/state"
+    elif cmd == "diagnostics":
+        endpoint = "/diagnostics"
+    elif cmd == "devices":
+        endpoint = "/devices"
+    elif cmd == "processes":
+        endpoint = "/processes"
+        if args.scope != "running":
+            params["scope"] = args.scope
     elif cmd == "project-current":
         endpoint = "/project/current"
     elif cmd == "project-select":
@@ -199,6 +224,21 @@ def main() -> int:
         method = "POST"
         endpoint = "/extra-args/set"
         params["value"] = args.value
+    elif cmd == "adb-force-stop":
+        method = "POST"
+        endpoint = "/adb/force-stop"
+        if args.target:
+            params["target"] = args.target
+    elif cmd == "adb-open-app":
+        method = "POST"
+        endpoint = "/adb/open-app"
+        if args.target:
+            params["target"] = args.target
+    elif cmd == "console-clear":
+        method = "POST"
+        endpoint = "/console/clear"
+        if args.type != "run":
+            params["type"] = args.type
     elif cmd == "run":
         method = "POST"
         endpoint = "/run"

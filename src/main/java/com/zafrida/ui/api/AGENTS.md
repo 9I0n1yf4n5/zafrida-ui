@@ -7,16 +7,18 @@
 - 把外部调用映射到现有 `ui/`、`fridaproject/`、`session/` 能力，禁止平行实现。
 - 接口返回结构化 JSON，便于脚本与工具链消费。
 
-## 接口清单（20 个接口 + 1 个汇总）
+## 接口清单（26 个接口 + 1 个汇总）
 - **状态与健康**：`/health`、`/state`（汇总，不含日志内容）。
 - **项目管理**：`/project/current`、`/project/select`、`/project/create`。
-- **设备与连接**：`/device/select`、`/connection-mode/set`、`/target/set`。
+- **设备与进程**：`/devices`（设备枚举）、`/processes`（进程/应用列表，支持 scope 参数）、`/device/select`、`/connection-mode/set`、`/target/set`。
 - **脚本与参数**：`/run-script/set`、`/attach-script/set`、`/extra-args/set`。
+- **ADB 操作**：`/adb/force-stop`、`/adb/open-app`（均可自动读取当前 target）。
 - **会话控制**：`/run`、`/stop`、`/attach`、`/stop-attach`。
 - **日志读取**：
   - `/run-log/path`、`/attach-log/path`：返回路径 + 文件大小（`fileSize`/`sizeHuman`）。
   - `/run-log/content`、`/attach-log/content`：读取内容（支持 `maxBytes` 截断，截断信息在元数据中传递，不污染 content 字段）。
   - `/run-log/lines`、`/attach-log/lines`：按行读取（支持 `start`/`count` 参数，单次上限 2000 行）。
+- **控制台与诊断**：`/console/clear`（清空 run/attach 控制台）、`/diagnostics`（6 项环境检查）。
 
 ## 线程与边界（强约束）
 - **UI 读写必须切回 EDT**：涉及 `ZaFridaRunPanel` / Swing 组件的操作，必须使用 `invokeLater` + 同步等待。

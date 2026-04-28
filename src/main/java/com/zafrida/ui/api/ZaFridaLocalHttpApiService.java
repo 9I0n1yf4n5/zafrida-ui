@@ -6,8 +6,16 @@ import com.intellij.openapi.application.ModalityState;
 import com.intellij.openapi.components.Service;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
+import com.zafrida.ui.adb.AdbService;
+import com.zafrida.ui.diagnostics.ZaFridaDiagnosticItem;
+import com.zafrida.ui.diagnostics.ZaFridaDiagnosticStatus;
+import com.zafrida.ui.diagnostics.ZaFridaDiagnosticsListener;
+import com.zafrida.ui.diagnostics.ZaFridaDiagnosticsService;
+import com.zafrida.ui.frida.FridaCliService;
 import com.zafrida.ui.frida.FridaConnectionMode;
 import com.zafrida.ui.frida.FridaDevice;
+import com.zafrida.ui.frida.FridaProcess;
+import com.zafrida.ui.frida.FridaProcessScope;
 import com.zafrida.ui.fridaproject.ZaFridaFridaProject;
 import com.zafrida.ui.fridaproject.ZaFridaPlatform;
 import com.zafrida.ui.fridaproject.ZaFridaProjectConfig;
@@ -60,7 +68,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * <p>
  * 说明：
  * 1. 仅绑定到 127.0.0.1，避免暴露到公网。
- * 2. 19 个单独接口 + 1 个汇总接口（不包含日志内容）。
+ * 2. 25 个单独接口 + 1 个汇总接口（不包含日志内容）。
  * 3. 任何 UI 读取/写入都通过 EDT 调度，避免线程模型破坏。
  */
 @Service(Service.Level.PROJECT)
@@ -98,8 +106,17 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
     private static final String API_RUN_LOG_LINES = API_BASE + "/run-log/lines";
     private static final String API_ATTACH_LOG_LINES = API_BASE + "/attach-log/lines";
 
+    private static final String API_DEVICES = API_BASE + "/devices";
+    private static final String API_PROCESSES = API_BASE + "/processes";
+    private static final String API_ADB_FORCE_STOP = API_BASE + "/adb/force-stop";
+    private static final String API_ADB_OPEN_APP = API_BASE + "/adb/open-app";
+    private static final String API_CONSOLE_CLEAR = API_BASE + "/console/clear";
+    private static final String API_DIAGNOSTICS = API_BASE + "/diagnostics";
+
     /** 单次按行读取的上限行数 */
     private static final int MAX_LINES_PER_REQUEST = 2000;
+    /** 诊断超时（诊断含多项检查，给予充足时间） */
+    private static final long DIAGNOSTICS_TIMEOUT_SECONDS = 60L;
 
     private static final AtomicInteger SERVER_THREAD_ID = new AtomicInteger(1);
 
@@ -107,6 +124,9 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
     private final @NotNull ZaFridaProjectManager projectManager;
     private final @NotNull ZaFridaSessionService sessionService;
     private final @NotNull ZaFridaSettingsService settingsService;
+    private final @NotNull FridaCliService fridaCliService;
+    private final @NotNull AdbService adbService;
+    private final @NotNull ZaFridaDiagnosticsService diagnosticsService;
 
     private final AtomicReference<ZaFridaRunPanel> runPanelRef = new AtomicReference<>();
     private final Object serverLock = new Object();
@@ -121,6 +141,9 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         this.projectManager = project.getService(ZaFridaProjectManager.class);
         this.sessionService = project.getService(ZaFridaSessionService.class);
         this.settingsService = ApplicationManager.getApplication().getService(ZaFridaSettingsService.class);
+        this.fridaCliService = ApplicationManager.getApplication().getService(FridaCliService.class);
+        this.adbService = ApplicationManager.getApplication().getService(AdbService.class);
+        this.diagnosticsService = ApplicationManager.getApplication().getService(ZaFridaDiagnosticsService.class);
         maybeStartBySettingsAsync();
     }
 
@@ -304,6 +327,13 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         createdServer.createContext(API_ATTACH_LOG_CONTENT, exchange -> dispatch(exchange, "GET", this::handleAttachLogContent));
         createdServer.createContext(API_RUN_LOG_LINES, exchange -> dispatch(exchange, "GET", this::handleRunLogLines));
         createdServer.createContext(API_ATTACH_LOG_LINES, exchange -> dispatch(exchange, "GET", this::handleAttachLogLines));
+
+        createdServer.createContext(API_DEVICES, exchange -> dispatch(exchange, "GET", this::handleDevices));
+        createdServer.createContext(API_PROCESSES, exchange -> dispatch(exchange, "GET", this::handleProcesses));
+        createdServer.createContext(API_ADB_FORCE_STOP, exchange -> dispatch(exchange, "POST", this::handleAdbForceStop));
+        createdServer.createContext(API_ADB_OPEN_APP, exchange -> dispatch(exchange, "POST", this::handleAdbOpenApp));
+        createdServer.createContext(API_CONSOLE_CLEAR, exchange -> dispatch(exchange, "POST", this::handleConsoleClear));
+        createdServer.createContext(API_DIAGNOSTICS, exchange -> dispatch(exchange, "GET", this::handleDiagnostics));
     }
 
     private void dispatch(@NotNull HttpExchange exchange,
@@ -785,6 +815,285 @@ public final class ZaFridaLocalHttpApiService implements Disposable {
         data.put("linesRead", lines.size());
         data.put("hasMore", hasMore);
         data.put("lines", lines);
+        return data;
+    }
+
+    // ── 设备列表 ──
+
+    /**
+     * 列出所有已连接设备（调用 frida-ls-devices，在后台线程执行）。
+     */
+    private @NotNull Map<String, Object> handleDevices(@NotNull RequestContext request) throws Exception {
+        List<FridaDevice> devices;
+        try {
+            devices = fridaCliService.listDevices(project);
+        } catch (Exception e) {
+            throw new ApiException(500, String.format("枚举设备失败: %s", e.getMessage()));
+        }
+
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (FridaDevice device : devices) {
+            Map<String, Object> item = deviceToMap(device);
+            if (item != null) {
+                list.add(item);
+            }
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("count", list.size());
+        data.put("devices", list);
+        return data;
+    }
+
+    // ── 进程/应用列表 ──
+
+    /**
+     * 列出当前选中设备上的进程或应用。
+     * <p>
+     * 参数：scope（running/apps/installed，默认 running）。
+     */
+    private @NotNull Map<String, Object> handleProcesses(@NotNull RequestContext request) throws Exception {
+        FridaDevice device = callOnUiThreadAndWait(() -> {
+            ZaFridaRunPanel panel = runPanelRef.get();
+            if (panel == null) {
+                return null;
+            }
+            return panel.getSelectedDeviceForApi();
+        });
+
+        if (device == null) {
+            throw new ApiException(409, "未选中设备，请先通过 /device/select 选择设备");
+        }
+
+        String scopeParam = request.get("scope");
+        FridaProcessScope scope = parseProcessScope(scopeParam);
+
+        List<FridaProcess> processes;
+        try {
+            processes = fridaCliService.listProcesses(project, device, scope);
+        } catch (Exception e) {
+            throw new ApiException(500, String.format("列出进程失败: %s", e.getMessage()));
+        }
+
+        List<Map<String, Object>> list = new ArrayList<>();
+        for (FridaProcess proc : processes) {
+            Map<String, Object> item = new LinkedHashMap<>();
+            item.put("pid", proc.getPid());
+            item.put("name", proc.getName());
+            item.put("identifier", proc.getIdentifier());
+            list.add(item);
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("device", deviceToMap(device));
+        data.put("scope", scope.name().toLowerCase(Locale.ROOT));
+        data.put("count", list.size());
+        data.put("processes", list);
+        return data;
+    }
+
+    private static @NotNull FridaProcessScope parseProcessScope(@Nullable String raw) {
+        if (ZaStrUtil.isBlank(raw)) {
+            return FridaProcessScope.RUNNING_PROCESSES;
+        }
+        String normalized = raw.trim().toLowerCase(Locale.ROOT);
+        if ("apps".equals(normalized) || "running_apps".equals(normalized)) {
+            return FridaProcessScope.RUNNING_APPS;
+        }
+        if ("installed".equals(normalized) || "installed_apps".equals(normalized)) {
+            return FridaProcessScope.INSTALLED_APPS;
+        }
+        return FridaProcessScope.RUNNING_PROCESSES;
+    }
+
+    // ── ADB 操作 ──
+
+    /**
+     * 通过 ADB 强制停止应用。
+     * <p>
+     * 参数：target（可选，默认使用当前 UI 中的 target）。
+     */
+    private @NotNull Map<String, Object> handleAdbForceStop(@NotNull RequestContext request) throws Exception {
+        String target = resolveAdbTarget(request);
+        String deviceId = resolveCurrentDeviceId();
+
+        CompletableFuture<Map<String, Object>> future = new CompletableFuture<>();
+        List<String> logs = new ArrayList<>();
+
+        adbService.forceStop(
+                target,
+                deviceId,
+                logs::add,
+                logs::add
+        );
+
+        return buildAdbResult("force-stop", target, logs);
+    }
+
+    /**
+     * 通过 ADB 启动应用。
+     * <p>
+     * 参数：target（可选，默认使用当前 UI 中的 target）。
+     */
+    private @NotNull Map<String, Object> handleAdbOpenApp(@NotNull RequestContext request) throws Exception {
+        String target = resolveAdbTarget(request);
+        String deviceId = resolveCurrentDeviceId();
+
+        List<String> logs = new ArrayList<>();
+
+        adbService.openApp(
+                target,
+                deviceId,
+                logs::add,
+                logs::add
+        );
+
+        return buildAdbResult("open-app", target, logs);
+    }
+
+    private @NotNull String resolveAdbTarget(@NotNull RequestContext request) throws Exception {
+        String target = request.get("target");
+        if (ZaStrUtil.isNotBlank(target)) {
+            return target.trim();
+        }
+        String uiTarget = callOnUiThreadAndWait(() -> {
+            ZaFridaRunPanel panel = runPanelRef.get();
+            if (panel == null) {
+                return "";
+            }
+            return panel.getTargetTextForApi();
+        });
+        if (ZaStrUtil.isBlank(uiTarget)) {
+            throw new ApiException(400, "未指定 target 且当前 UI 中无目标应用");
+        }
+        return uiTarget.trim();
+    }
+
+    private @Nullable String resolveCurrentDeviceId() throws Exception {
+        FridaDevice device = callOnUiThreadAndWait(() -> {
+            ZaFridaRunPanel panel = runPanelRef.get();
+            if (panel == null) {
+                return null;
+            }
+            return panel.getSelectedDeviceForApi();
+        });
+        if (device == null) {
+            return null;
+        }
+        return device.getId();
+    }
+
+    private @NotNull Map<String, Object> buildAdbResult(@NotNull String action,
+                                                         @NotNull String target,
+                                                         @NotNull List<String> logs) {
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("action", action);
+        data.put("target", target);
+        data.put("accepted", true);
+        data.put("logs", logs);
+        return data;
+    }
+
+    // ── Console 清空 ──
+
+    /**
+     * 清空指定控制台。
+     * <p>
+     * 参数：type（run/attach，默认 run）。
+     */
+    private @NotNull Map<String, Object> handleConsoleClear(@NotNull RequestContext request) throws Exception {
+        String typeParam = request.get("type");
+        boolean isRun = !"attach".equalsIgnoreCase(typeParam == null ? "" : typeParam.trim());
+
+        callOnUiThreadAndWait(() -> {
+            ZaFridaRunPanel panel = runPanelRef.get();
+            if (panel == null) {
+                throw new ApiException(409, "RunPanel 尚未就绪");
+            }
+            ZaFridaConsolePanel console;
+            if (isRun) {
+                console = panel.getRunConsolePanelForApi();
+            } else {
+                console = panel.getAttachConsolePanelForApi();
+            }
+            console.clear();
+            return null;
+        });
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("action", "console-clear");
+        data.put("type", isRun ? "run" : "attach");
+        data.put("accepted", true);
+        return data;
+    }
+
+    // ── 环境诊断 ──
+
+    /**
+     * 运行环境诊断（6 项检查：Python SDK / Frida 路径 / 版本 / 设备枚举 / 设备连通 / ADB）。
+     * <p>
+     * 诊断在后台线程执行，本接口同步等待全部完成后返回结果。
+     */
+    private @NotNull Map<String, Object> handleDiagnostics(@NotNull RequestContext request) throws Exception {
+        FridaDevice device = callOnUiThreadAndWait(() -> {
+            ZaFridaRunPanel panel = runPanelRef.get();
+            if (panel == null) {
+                return null;
+            }
+            return panel.getSelectedDeviceForApi();
+        });
+
+        List<ZaFridaDiagnosticItem> items = diagnosticsService.createDefaultItems();
+        CompletableFuture<List<ZaFridaDiagnosticItem>> future = new CompletableFuture<>();
+
+        diagnosticsService.runDiagnostics(project, device, items, new ZaFridaDiagnosticsListener() {
+            @Override
+            public void onItemUpdated(@NotNull ZaFridaDiagnosticItem item) {
+                // 无需逐项回调
+            }
+
+            @Override
+            public void onAllCompleted(@NotNull List<ZaFridaDiagnosticItem> completedItems) {
+                future.complete(completedItems);
+            }
+        });
+
+        List<ZaFridaDiagnosticItem> results;
+        try {
+            results = future.get(DIAGNOSTICS_TIMEOUT_SECONDS, TimeUnit.SECONDS);
+        } catch (TimeoutException e) {
+            throw new ApiException(504, "诊断超时");
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new ApiException(500, "诊断被中断");
+        } catch (ExecutionException e) {
+            throw new ApiException(500, String.format("诊断执行失败: %s", e.getMessage()));
+        }
+
+        List<Map<String, Object>> itemList = new ArrayList<>();
+        int successCount = 0;
+        int failedCount = 0;
+        for (ZaFridaDiagnosticItem item : results) {
+            Map<String, Object> entry = new LinkedHashMap<>();
+            entry.put("id", item.getId());
+            entry.put("title", item.getTitle());
+            entry.put("status", item.getStatus().name().toLowerCase(Locale.ROOT));
+            entry.put("message", item.getMessage());
+            entry.put("tip", item.getTip());
+            itemList.add(entry);
+
+            if (item.getStatus() == ZaFridaDiagnosticStatus.SUCCESS) {
+                successCount++;
+            } else if (item.getStatus() == ZaFridaDiagnosticStatus.FAILED) {
+                failedCount++;
+            }
+        }
+
+        Map<String, Object> data = new LinkedHashMap<>();
+        data.put("total", results.size());
+        data.put("success", successCount);
+        data.put("failed", failedCount);
+        data.put("items", itemList);
         return data;
     }
 
